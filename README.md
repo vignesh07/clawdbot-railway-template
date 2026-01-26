@@ -1,5 +1,7 @@
 # Clawdbot Railway Template (1‑click deploy)
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/clawdbot-railway-template)
+
 This repo packages **Clawdbot** for Railway with a small **/setup** web wizard so users can deploy and onboard **without running any commands**.
 
 ## What you get
@@ -35,7 +37,7 @@ Optional:
 - `CLAWDBOT_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
 
 Notes:
-- This template pins Clawdbot to a known-good version by default via Docker build arg `CLAWDBOT_VERSION`.
+- `CLAWDBOT_GIT_REF` — specifies the Clawdbot version to install. If not set, defaults to the latest code from the `main` branch. Recommended to set to a specific release tag (e.g., `v2026.1.24`) for stability. See available versions at: https://github.com/clawdbot/clawdbot/releases
 
 4) Enable **Public Networking** (HTTP). Railway will assign a domain.
 5) Deploy.
