@@ -68,4 +68,4 @@ COPY src ./src
 
 ENV PORT=8080
 EXPOSE 8080
-CMD ["node", "src/server.js"]
+CMD ["node", "--max-old-space-size=2048", "src/server.js"]

@@ -16,12 +16,33 @@ This repo packages **Clawdbot** for Railway with a small **/setup** web wizard s
 - During setup, the wrapper runs `clawdbot onboard --non-interactive ...` inside the container, writes state to the volume, and then starts the gateway.
 - After setup, **`/` is Clawdbot**. The wrapper reverse-proxies all traffic (including WebSockets) to the local gateway process.
 
-## Railway deploy instructions (what you’ll publish as a Template)
+## System Requirements
+
+### Memory Requirements
+
+Clawdbot requires adequate memory to run both the wrapper server and the gateway process:
+
+- **Minimum:** 1GB RAM (Railway Hobby plan)
+- **Recommended:** 2GB+ RAM for stable operation
+- **Not Supported:** Railway free tier (512MB) - will crash with out-of-memory errors
+
+### Railway Plan Requirements
+
+- **Hobby Plan ($5/month):** 1GB RAM - Adequate for basic usage
+- **Pro Plan ($20/month):** 8GB RAM - Recommended for production
+- **Free Trial:** 512MB RAM - Insufficient, will cause crashes
+
+**Important:** The free trial will not work. You need at least the Hobby plan.
+
+## Railway deploy instructions (what you'll publish as a Template)
 
 In Railway Template Composer:
 
 1) Create a new template from this GitHub repo.
 2) Add a **Volume** mounted at `/data`.
+
+> ⚠️ **Memory Requirement:** Ensure your Railway plan provides at least 1GB RAM. The free trial (512MB) will cause out-of-memory crashes during startup. See [System Requirements](#system-requirements) above.
+
 3) Set the following variables:
 
 Required:
@@ -75,3 +96,52 @@ docker run --rm -p 8080:8080 \
 
 # open http://localhost:8080/setup (password: test)
 ```
+
+## Troubleshooting
+
+### Out of Memory Errors
+
+**Symptoms:**
+- Container crashes 30-60 seconds after startup
+- Railway logs show: `FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory`
+- Memory logs show: `Scavenge XXX.X -> XXX.X MB` followed by crash
+
+**Solutions:**
+
+1. **Upgrade Railway Plan** (Required)
+   - The free trial (512MB) is insufficient
+   - Upgrade to Hobby plan ($5/month, 1GB RAM) minimum
+   - Navigate to Project Settings → Upgrade Plan
+   - Redeploy after upgrading
+
+2. **Verify Memory Flag** (Already configured)
+   - This template includes `--max-old-space-size=2048` in the Dockerfile
+   - No action needed unless you modified the Dockerfile
+
+3. **Check Current Memory Usage**
+   - In Railway dashboard, go to Metrics tab
+   - Monitor memory usage over time
+   - If consistently near limit, consider Pro plan (8GB RAM)
+
+### Gateway Startup Timeout
+
+**Symptoms:**
+- Setup completes but gateway doesn't respond
+- Browser shows connection errors
+
+**Solution:**
+- The wrapper waits 20 seconds for gateway startup
+- On constrained resources or slow networks, this may be insufficient
+- Wait 1-2 minutes and refresh the page
+- Check Railway logs for gateway startup progress
+
+### Setup Password Issues
+
+**Symptoms:**
+- Cannot access `/setup` endpoint
+- Error: "SETUP_PASSWORD is not set"
+
+**Solution:**
+- Add `SETUP_PASSWORD` variable in Railway project settings (Variables tab)
+- Set to a strong, unique password
+- Redeploy the service
