@@ -91,12 +91,53 @@ async function waitForGatewayReady(opts = {}) {
   return false;
 }
 
+async function deleteTelegramWebhook() {
+  const configFilePath = configPath();
+  if (!fs.existsSync(configFilePath)) return;
+
+  try {
+    const config = JSON.parse(fs.readFileSync(configFilePath, "utf8"));
+    const telegram = config.channels?.telegram;
+    const token = telegram?.token || telegram?.botToken;
+
+    if (!token) return;
+
+    console.log("[webhook-fix] Checking Telegram webhook...");
+
+    const webhookInfo = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+    const infoData = await webhookInfo.json();
+
+    if (infoData.ok && infoData.result.url) {
+      console.log(`[webhook-fix] Webhook found: ${infoData.result.url}`);
+      console.log("[webhook-fix] Deleting webhook to enable polling mode...");
+
+      const deleteResponse = await fetch(
+        `https://api.telegram.org/bot${token}/deleteWebhook?drop_pending_updates=true`
+      );
+      const deleteData = await deleteResponse.json();
+
+      if (deleteData.ok) {
+        console.log("[webhook-fix] ✓ Webhook deleted successfully!");
+      } else {
+        console.log("[webhook-fix] Failed to delete webhook:", deleteData);
+      }
+    } else {
+      console.log("[webhook-fix] No webhook set - OK");
+    }
+  } catch (err) {
+    console.log(`[webhook-fix] Error: ${err.message}`);
+  }
+}
+
 async function startGateway() {
   if (gatewayProc) return;
   if (!isConfigured()) throw new Error("Gateway cannot start: not configured");
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+  // Delete Telegram webhook before starting (fixes 409 conflict)
+  await deleteTelegramWebhook();
 
   const args = [
     "gateway",
