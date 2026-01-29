@@ -4,12 +4,12 @@ FROM node:22-bookworm AS clawdbot-build
 # Dependencies needed for clawdbot build
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    git \
-    ca-certificates \
-    curl \
-    python3 \
-    make \
-    g++ \
+  git \
+  ca-certificates \
+  curl \
+  python3 \
+  make \
+  g++ \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Bun (clawdbot build uses it)
@@ -20,8 +20,8 @@ RUN corepack enable
 
 WORKDIR /clawdbot
 
-# Pin to a known ref (tag/branch). If it doesn't exist, fall back to main.
-ARG CLAWDBOT_GIT_REF=main
+# Pin to a known stable version. Use v2026.1.24 to avoid unstable main branch compilation errors.
+ARG CLAWDBOT_GIT_REF=v2026.1.24
 RUN git clone --depth 1 --branch "${CLAWDBOT_GIT_REF}" https://github.com/clawdbot/clawdbot.git .
 
 # Patch: relax version requirements for packages that may reference unpublished versions.
@@ -44,7 +44,7 @@ ENV NODE_ENV=production
 
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    ca-certificates \
+  ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
