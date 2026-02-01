@@ -22,7 +22,10 @@ WORKDIR /openclaw
 
 # Pin to a known ref (tag/branch). If it doesn't exist, fall back to main.
 ARG OPENCLAW_GIT_REF=main
-RUN git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" https://github.com/openclaw/openclaw.git .
+# Force cache invalidation by using the commit SHA
+ARG RAILWAY_GIT_COMMIT_SHA
+RUN echo "Invalidating cache for commit: ${RAILWAY_GIT_COMMIT_SHA}" && \
+    git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" https://github.com/dodocha2021/openclaw.git .
 
 # Patch: relax version requirements for packages that may reference unpublished versions.
 # Apply to all extension package.json files to handle workspace protocol (workspace:*).
@@ -32,10 +35,45 @@ RUN set -eux; \
     sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*"workspace:[^"]+"/"openclaw": "*"/g' "$f"; \
   done
 
+# Patch: Make Moonshot API endpoint configurable via build arg
+# Default: international endpoint (api.moonshot.ai) for Railway deployments
+# Set MOONSHOT_API_REGION=cn to use China endpoint (api.moonshot.cn)
+ARG MOONSHOT_API_REGION=international
+RUN set -eux; \
+  if [ -f "./src/commands/onboard-auth.models.ts" ]; then \
+    if [ "$MOONSHOT_API_REGION" = "cn" ]; then \
+      echo "[patch] Keeping Moonshot API endpoint as China version (api.moonshot.cn)"; \
+    else \
+      sed -i 's|https://api.moonshot.cn/v1|https://api.moonshot.ai/v1|g' ./src/commands/onboard-auth.models.ts; \
+      echo "[patch] Updated Moonshot API endpoint to international version (api.moonshot.ai)"; \
+    fi; \
+  fi
+
+# Patch: Fix OpenRouter model ID format (PR #5079)
+# Changes "openrouter/auto" to "openrouter/openrouter/auto" to match expected format
+RUN set -eux; \
+  if [ -f "./src/commands/onboard-auth.credentials.ts" ]; then \
+    sed -i 's|"openrouter/auto"|"openrouter/openrouter/auto"|g' ./src/commands/onboard-auth.credentials.ts; \
+    echo "[patch] Fixed OpenRouter model ID format"; \
+  fi
+
 RUN pnpm install --no-frozen-lockfile
 RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:install && pnpm ui:build
+
+# Patch: Ensure workspace templates are available
+# The onboard process requires AGENTS.md template
+RUN set -eux; \
+  mkdir -p ./docs/reference/templates; \
+  if [ ! -f "./docs/reference/templates/AGENTS.md" ]; then \
+    echo "# Agent Instructions" > ./docs/reference/templates/AGENTS.md; \
+    echo "" >> ./docs/reference/templates/AGENTS.md; \
+    echo "This file contains instructions for the AI agent." >> ./docs/reference/templates/AGENTS.md; \
+    echo "[patch] Created minimal AGENTS.md template"; \
+  else \
+    echo "[patch] AGENTS.md template already exists"; \
+  fi
 
 
 # Runtime image
@@ -57,7 +95,7 @@ RUN npm install --omit=dev && npm cache clean --force
 COPY --from=openclaw-build /openclaw /openclaw
 
 # Provide an openclaw executable
-RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"' > /usr/local/bin/openclaw \
+RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/index.mjs "$@"' > /usr/local/bin/openclaw \
   && chmod +x /usr/local/bin/openclaw
 
 COPY src ./src
