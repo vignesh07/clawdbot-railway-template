@@ -1,10 +1,14 @@
 [build]
 builder = "dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 healthcheckPath = "/setup/healthz"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
+startCommand = "node src/server.js"
 
 [variables]
 PORT = "8080"
+OPENCLAW_PUBLIC_PORT = "8080"
+NODE_ENV = "production"

@@ -2,6 +2,8 @@
 
 This repo packages **OpenClaw** for Railway with a small **/setup** web wizard so users can deploy and onboard **without running any commands**.
 
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/clawdbot-railway-template)
+
 ## What you get
 
 - **OpenClaw Gateway + Control UI** (served at `/` and `/openclaw`)
@@ -9,6 +11,7 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
 - One-click **Export backup** (so users can migrate off Railway later)
 - **Import backup** from `/setup` (advanced recovery)
+- **Docker-based deployment** optimized for Railway's platform
 
 ## How it works (high level)
 
@@ -63,6 +66,8 @@ Then:
 
 ## Local smoke test
 
+### Using Docker directly
+
 ```bash
 docker build -t openclaw-railway-template .
 
@@ -76,6 +81,55 @@ docker run --rm -p 8080:8080 \
 
 # open http://localhost:8080/setup (password: test)
 ```
+
+### Using Docker Compose
+
+For easier local development and testing, use docker-compose:
+
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Edit .env and set your SETUP_PASSWORD
+# Then start the container
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the container
+docker-compose down
+
+# open http://localhost:8080/setup (use password from .env)
+```
+
+This approach is useful for:
+- Testing the Docker setup before deploying to Railway
+- Local development and debugging
+- Validating environment variable configuration
+
+See `.env.example` for all available configuration options.
+
+## Docker to Railway Migration
+
+This template makes it easy to migrate from Docker/Docker Compose to Railway:
+
+**Key Benefits:**
+- ✅ No docker-compose needed - Railway handles orchestration
+- ✅ Automatic HTTPS - Railway provides SSL certificates  
+- ✅ Built-in logging - Access logs via Railway dashboard
+- ✅ Zero-downtime deploys - Railway handles rolling updates
+- ✅ Persistent volumes - Railway Volumes for state storage
+- ✅ One-click deploys - Use the template button above
+
+**Migration Steps:**
+1. Deploy this template to Railway (one-click button above)
+2. Add a Railway Volume mounted at `/data`
+3. Set `SETUP_PASSWORD` environment variable
+4. Enable public networking
+5. Access your deployment at the assigned Railway URL
+
+For detailed migration guide, see [RAILWAY_DEPLOYMENT.md](./RAILWAY_DEPLOYMENT.md#migration-from-docker-compose).
 
 ---
 

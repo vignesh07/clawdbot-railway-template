@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  openclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Pin to a specific OpenClaw version if desired
+        OPENCLAW_GIT_REF: main
+    ports:
+      - "8080:8080"
+    volumes:
+      # Persistent data storage
+      - openclaw-data:/data
+    environment:
+      # Required: Password for /setup access
+      - SETUP_PASSWORD=${SETUP_PASSWORD:-changeme}
+      
+      # Port configuration
+      - PORT=8080
+      - OPENCLAW_PUBLIC_PORT=8080
+      
+      # State and workspace directories (should be on volume)
+      - OPENCLAW_STATE_DIR=/data/.openclaw
+      - OPENCLAW_WORKSPACE_DIR=/data/workspace
+      
+      # Optional: Gateway token (auto-generated if not set)
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-}
+      
+      # Node environment
+      - NODE_ENV=production
+      
+      # Internal gateway configuration
+      - INTERNAL_GATEWAY_PORT=18789
+      - INTERNAL_GATEWAY_HOST=127.0.0.1
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/setup/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  openclaw-data:
+    driver: local
