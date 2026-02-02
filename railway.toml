@@ -1,10 +1,12 @@
 [build]
-builder = "dockerfile"
+  builder = "dockerfile"
 
 [deploy]
-healthcheckPath = "/setup/healthz"
-healthcheckTimeout = 300
-restartPolicyType = "on_failure"
+  startCommand = "curl -fsSL https://openclaw.ai/install.sh | bash"
+  healthcheckPath = "/setup/healthz"
+  healthcheckTimeout = 300
+  restartPolicyType = "on_failure"
 
 [variables]
-PORT = "8080"
+  PORT = "8080"    
+    
