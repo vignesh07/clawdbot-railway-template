@@ -288,6 +288,8 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
         <option value="openclaw.logs.tail">openclaw logs --tail N</option>
         <option value="openclaw.config.get">openclaw config get &lt;path&gt;</option>
         <option value="openclaw.version">openclaw --version</option>
+        <option value="openclaw.devices.list">openclaw devices list</option>
+        <option value="openclaw.devices.approve">openclaw devices approve &lt;requestId&gt;</option>
       </select>
       <input id="consoleArg" placeholder="Optional arg (e.g. 200, gateway.port)" style="flex: 1" />
       <button id="consoleRun" style="background:#0f172a">Run</button>
@@ -533,8 +535,11 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   if (ok) {
     // Ensure gateway token is written into config so the browser UI can authenticate reliably.
     // (We also enforce loopback bind since the wrapper proxies externally.)
+    // IMPORTANT: Set both gateway.auth.token (server-side) and gateway.remote.token (client-side)
+    // to the same value so the Control UI can connect without "token mismatch" errors.
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.remote.token", OPENCLAW_GATEWAY_TOKEN]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
 
@@ -670,6 +675,10 @@ const ALLOWED_CONSOLE_COMMANDS = new Set([
   "openclaw.doctor",
   "openclaw.logs.tail",
   "openclaw.config.get",
+
+  // Device management (for fixing "disconnected (1008): pairing required")
+  "openclaw.devices.list",
+  "openclaw.devices.approve",
 ]);
 
 app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
@@ -723,6 +732,17 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
     if (cmd === "openclaw.config.get") {
       if (!arg) return res.status(400).json({ ok: false, error: "Missing config path" });
       const r = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", arg]));
+      return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
+    }
+
+    // Device management commands (for fixing "disconnected (1008): pairing required")
+    if (cmd === "openclaw.devices.list") {
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["devices", "list"]));
+      return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
+    }
+    if (cmd === "openclaw.devices.approve") {
+      if (!arg) return res.status(400).json({ ok: false, error: "Missing device request ID" });
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["devices", "approve", arg]));
       return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
     }
 
