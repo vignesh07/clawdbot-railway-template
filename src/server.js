@@ -45,7 +45,7 @@ function resolveSetupPassword() {
       return existing;
     }
   } catch {
-    // ignore
+    // File doesn't exist yet on first run - this is expected
   }
 
   // Generate a secure random password (16 bytes = 32 hex chars)
@@ -53,8 +53,9 @@ function resolveSetupPassword() {
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
     fs.writeFileSync(pwPath, generated, { encoding: "utf8", mode: 0o600 });
-  } catch {
-    // best-effort
+  } catch (err) {
+    console.warn(`[wrapper] WARNING: Failed to persist SETUP_PASSWORD to ${pwPath}: ${err.message}`);
+    console.warn("[wrapper] Password will be regenerated on restart. Set SETUP_PASSWORD env var for stability.");
   }
   SETUP_PASSWORD_WAS_GENERATED = true;
   return generated;
@@ -988,8 +989,11 @@ const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`[wrapper] gateway token: ${OPENCLAW_GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
   console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
   if (SETUP_PASSWORD_WAS_GENERATED) {
+    console.log(`[wrapper] ================================================`);
     console.log(`[wrapper] SETUP_PASSWORD was auto-generated: ${SETUP_PASSWORD}`);
-    console.log(`[wrapper] Set SETUP_PASSWORD in Railway Variables to use your own password.`);
+    console.log(`[wrapper] Use this password to access /setup`);
+    console.log(`[wrapper] For production, set SETUP_PASSWORD in Railway Variables`);
+    console.log(`[wrapper] ================================================`);
   }
   // Don't start gateway unless configured; proxy will ensure it starts.
 });
