@@ -57,7 +57,7 @@ ENV MISE_CONFIG_DIR="/root"
 ENV MISE_GLOBAL_CONFIG_FILE="/root/mise.toml"
 
 # Copy mise config and install tools
-COPY mise.toml /root/mise.toml
+COPY docker/mise.toml /root/mise.toml
 RUN mise install \
   && mise reshim \
   && mise exec -- bun --version \
