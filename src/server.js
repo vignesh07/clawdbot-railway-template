@@ -165,9 +165,9 @@ async function startGateway() {
 
   // The internal gateway is bound to loopback and only reachable via the
   // wrapper proxy, so we disable auth on it entirely. The wrapper handles
-  // external authentication (Basic auth on /setup). This avoids the "gateway
-  // token mismatch" error that occurs because the Control UI SPA authenticates
-  // at the WebSocket application-protocol level, which the proxy cannot inject.
+  // external authentication (GitHub OAuth). This avoids the "gateway token
+  // mismatch" error that occurs because the Control UI SPA authenticates at
+  // the WebSocket application-protocol level, which the proxy cannot inject.
   try {
     const cfgFile = configPath();
     const cfg = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
@@ -257,6 +257,30 @@ async function restartGateway() {
   return ensureGatewayRunning();
 }
 
+// ---------- Helpers ----------
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+const SESSION_CONFIG = {
+  secret: SESSION_SECRET,
+  name: "openclaw.sid",
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production" || Boolean(process.env.RAILWAY_ENVIRONMENT),
+    sameSite: "lax",
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+  },
+};
+
 // ---------- GitHub OAuth helpers ----------
 
 async function githubFetch(url, opts = {}) {
@@ -316,26 +340,13 @@ app.set("trust proxy", 1); // trust Railway's reverse proxy for secure cookies
 app.use(express.json({ limit: "1mb" }));
 
 // Session middleware
-app.use(
-  session({
-    secret: SESSION_SECRET,
-    name: "openclaw.sid",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    },
-  }),
-);
+app.use(session(SESSION_CONFIG));
 
 // ---------- Auth routes ----------
 
 function loginPageHTML(error) {
   const errorBlock = error
-    ? `<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:0.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:0.9rem;">${error}</div>`
+    ? `<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:0.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:0.9rem;">${escapeHtml(error)}</div>`
     : "";
   const notConfigured = !isAuthConfigured()
     ? `<div style="background:#fefce8;border:1px solid #fde68a;color:#92400e;padding:0.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:0.85rem;">
@@ -496,13 +507,13 @@ app.get("/setup/app.js", (_req, res) => {
   res.send(fs.readFileSync(path.join(process.cwd(), "src", "setup-app.js"), "utf8"));
 });
 
-app.get("/setup", (_req, res) => {
+app.get("/setup", (req, res) => {
   const user = req.session?.user;
   const userBar = user
     ? `<div class="user-bar">
         <div style="display:flex;align-items:center;gap:0.5rem;">
-          <img src="${user.avatar}" alt="" style="width:24px;height:24px;border-radius:50%;" />
-          <span style="font-size:0.85rem;color:#a3a3a3;">${user.name || user.login}</span>
+          <img src="${escapeHtml(user.avatar)}" alt="" style="width:24px;height:24px;border-radius:50%;" />
+          <span style="font-size:0.85rem;color:#a3a3a3;">${escapeHtml(user.name || user.login)}</span>
         </div>
         <a href="/auth/logout" style="font-size:0.85rem;color:#a3a3a3;text-decoration:none;">Sign out</a>
       </div>`
@@ -802,7 +813,7 @@ app.post("/setup/api/run", async (req, res) => {
   if (ok) {
     // The internal gateway is bound to loopback and only reachable through
     // the wrapper proxy, so we disable auth entirely to avoid "token mismatch"
-    // errors. The wrapper's SETUP_PASSWORD protects /setup externally.
+    // errors. The wrapper's GitHub OAuth session protects all routes externally.
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "none"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
@@ -1271,12 +1282,7 @@ server.on("upgrade", async (req, socket, head) => {
   if (isAuthConfigured()) {
     const authenticated = await new Promise((resolve) => {
       const fakeRes = { end() {}, setHeader() {}, getHeader() { return undefined; } };
-      session({
-        secret: SESSION_SECRET,
-        name: "openclaw.sid",
-        resave: false,
-        saveUninitialized: false,
-      })(req, fakeRes, () => {
+      session(SESSION_CONFIG)(req, fakeRes, () => {
         resolve(Boolean(req.session?.user));
       });
     });
