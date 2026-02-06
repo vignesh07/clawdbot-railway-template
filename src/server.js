@@ -8,26 +8,50 @@ import express from "express";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
 
+/** @type {Set<string>} */
+const warnedDeprecatedEnv = new Set();
+
+/**
+ * Prefer `primaryKey`, fall back to `deprecatedKey` with a one-time warning.
+ * @param {string} primaryKey
+ * @param {string} deprecatedKey
+ */
+function getEnvWithShim(primaryKey, deprecatedKey) {
+  const primary = process.env[primaryKey]?.trim();
+  if (primary) return primary;
+
+  const deprecated = process.env[deprecatedKey]?.trim();
+  if (!deprecated) return undefined;
+
+  if (!warnedDeprecatedEnv.has(deprecatedKey)) {
+    console.warn(
+      `[deprecation] ${deprecatedKey} is deprecated. Use ${primaryKey} instead.`,
+    );
+    warnedDeprecatedEnv.add(deprecatedKey);
+  }
+
+  return deprecated;
+}
+
 // Railway deployments sometimes inject PORT=3000 by default. We want the wrapper to
 // reliably listen on 8080 unless explicitly overridden.
 //
 // Prefer OPENCLAW_PUBLIC_PORT (set in the Dockerfile / template) over PORT.
-// Keep CLAWDBOT_PUBLIC_PORT as a backward-compat alias for older templates.
 const PORT = Number.parseInt(
-  process.env.OPENCLAW_PUBLIC_PORT ?? process.env.CLAWDBOT_PUBLIC_PORT ?? process.env.PORT ?? "8080",
+  getEnvWithShim("OPENCLAW_PUBLIC_PORT", "CLAWDBOT_PUBLIC_PORT") ??
+    process.env.PORT ??
+    "8080",
   10,
 );
 
 // State/workspace
-// OpenClaw defaults to ~/.openclaw. Keep CLAWDBOT_* as backward-compat aliases.
+// OpenClaw defaults to ~/.openclaw.
 const STATE_DIR =
-  process.env.OPENCLAW_STATE_DIR?.trim() ||
-  process.env.CLAWDBOT_STATE_DIR?.trim() ||
+  getEnvWithShim("OPENCLAW_STATE_DIR", "CLAWDBOT_STATE_DIR") ||
   path.join(os.homedir(), ".openclaw");
 
 const WORKSPACE_DIR =
-  process.env.OPENCLAW_WORKSPACE_DIR?.trim() ||
-  process.env.CLAWDBOT_WORKSPACE_DIR?.trim() ||
+  getEnvWithShim("OPENCLAW_WORKSPACE_DIR", "CLAWDBOT_WORKSPACE_DIR") ||
   path.join(STATE_DIR, "workspace");
 
 // Protect /setup with a user-provided password.
@@ -36,7 +60,10 @@ const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
 // Gateway admin token (protects OpenClaw gateway + Control UI).
 // Must be stable across restarts. If not provided via env, persist it in the state dir.
 function resolveGatewayToken() {
-  const envTok = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+  const envTok = getEnvWithShim(
+    "OPENCLAW_GATEWAY_TOKEN",
+    "CLAWDBOT_GATEWAY_TOKEN",
+  );
   if (envTok) return envTok;
 
   const tokenPath = path.join(STATE_DIR, "gateway.token");
@@ -59,8 +86,6 @@ function resolveGatewayToken() {
 
 const OPENCLAW_GATEWAY_TOKEN = resolveGatewayToken();
 process.env.OPENCLAW_GATEWAY_TOKEN = OPENCLAW_GATEWAY_TOKEN;
-// Backward-compat: some older flows expect CLAWDBOT_GATEWAY_TOKEN.
-process.env.CLAWDBOT_GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN;
 
 // Where the gateway will listen internally (we proxy to it).
 const INTERNAL_GATEWAY_PORT = Number.parseInt(process.env.INTERNAL_GATEWAY_PORT ?? "18789", 10);
@@ -77,8 +102,7 @@ function clawArgs(args) {
 
 function configPath() {
   return (
-    process.env.OPENCLAW_CONFIG_PATH?.trim() ||
-    process.env.CLAWDBOT_CONFIG_PATH?.trim() ||
+    getEnvWithShim("OPENCLAW_CONFIG_PATH", "CLAWDBOT_CONFIG_PATH") ||
     path.join(STATE_DIR, "openclaw.json")
   );
 }
@@ -148,9 +172,6 @@ async function startGateway() {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
       OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-      // Backward-compat aliases
-      CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR || STATE_DIR,
-      CLAWDBOT_WORKSPACE_DIR: process.env.CLAWDBOT_WORKSPACE_DIR || WORKSPACE_DIR,
     },
   });
 
@@ -492,9 +513,6 @@ function runCmd(cmd, args, opts = {}) {
         ...process.env,
         OPENCLAW_STATE_DIR: STATE_DIR,
         OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-        // Backward-compat aliases
-        CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR || STATE_DIR,
-        CLAWDBOT_WORKSPACE_DIR: process.env.CLAWDBOT_WORKSPACE_DIR || WORKSPACE_DIR,
       },
     });
 
@@ -632,7 +650,7 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       stateDir: STATE_DIR,
       workspaceDir: WORKSPACE_DIR,
       configPath: configPath(),
-      gatewayTokenFromEnv: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim()),
+      gatewayTokenFromEnv: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN?.trim()),
       gatewayTokenPersisted: fs.existsSync(path.join(STATE_DIR, "gateway.token")),
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
     },
