@@ -98,6 +98,11 @@
     opts = opts || {};
     opts.credentials = 'same-origin';
     return fetch(url, opts).then(function (res) {
+      // If session expired, redirect to login
+      if (res.status === 401) {
+        window.location.href = '/auth/login';
+        return new Promise(function () {}); // never resolves
+      }
       if (!res.ok) {
         return res.text().then(function (t) {
           throw new Error('HTTP ' + res.status + ': ' + (t || res.statusText));

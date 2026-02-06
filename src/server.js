@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import express from "express";
+import session from "express-session";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
 
@@ -30,38 +31,41 @@ const WORKSPACE_DIR =
   process.env.CLAWDBOT_WORKSPACE_DIR?.trim() ||
   path.join(STATE_DIR, "workspace");
 
-// Protect /setup with a user-provided password.
-// If not set via env, auto-generate and persist (similar to gateway token).
-let SETUP_PASSWORD_WAS_GENERATED = false;
-function resolveSetupPassword() {
-  const envPw = process.env.SETUP_PASSWORD?.trim();
-  if (envPw) return envPw;
+// GitHub OAuth configuration.
+// Required env vars: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET
+// Optional: GITHUB_ALLOWED_USERS (comma-separated list of GitHub usernames)
+// If GITHUB_ALLOWED_USERS is not set, any GitHub user can log in.
+const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID?.trim() || "";
+const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET?.trim() || "";
+const GITHUB_ALLOWED_USERS = (process.env.GITHUB_ALLOWED_USERS || "")
+  .split(",")
+  .map((u) => u.trim().toLowerCase())
+  .filter(Boolean);
 
-  const pwPath = path.join(STATE_DIR, "setup.password");
+// Session secret: reuse a persisted value for stability across restarts.
+function resolveSessionSecret() {
+  const envSecret = process.env.SESSION_SECRET?.trim();
+  if (envSecret) return envSecret;
+
+  const secretPath = path.join(STATE_DIR, "session.secret");
   try {
-    const existing = fs.readFileSync(pwPath, "utf8").trim();
-    if (existing) {
-      SETUP_PASSWORD_WAS_GENERATED = true;
-      return existing;
-    }
+    const existing = fs.readFileSync(secretPath, "utf8").trim();
+    if (existing) return existing;
   } catch {
-    // File doesn't exist yet on first run - this is expected
+    // First run
   }
 
-  // Generate a secure random password (16 bytes = 32 hex chars)
-  const generated = crypto.randomBytes(16).toString("hex");
+  const generated = crypto.randomBytes(32).toString("hex");
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
-    fs.writeFileSync(pwPath, generated, { encoding: "utf8", mode: 0o600 });
-  } catch (err) {
-    console.warn(`[wrapper] WARNING: Failed to persist SETUP_PASSWORD to ${pwPath}: ${err.message}`);
-    console.warn("[wrapper] Password will be regenerated on restart. Set SETUP_PASSWORD env var for stability.");
+    fs.writeFileSync(secretPath, generated, { encoding: "utf8", mode: 0o600 });
+  } catch {
+    // best-effort
   }
-  SETUP_PASSWORD_WAS_GENERATED = true;
   return generated;
 }
 
-const SETUP_PASSWORD = resolveSetupPassword();
+const SESSION_SECRET = resolveSessionSecret();
 
 // Gateway admin token (protects OpenClaw gateway + Control UI).
 // Must be stable across restarts. If not provided via env, persist it in the state dir.
@@ -253,37 +257,257 @@ async function restartGateway() {
   return ensureGatewayRunning();
 }
 
-function requireSetupAuth(req, res, next) {
-  const header = req.headers.authorization || "";
-  const [scheme, encoded] = header.split(" ");
-  if (scheme !== "Basic" || !encoded) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
-    return res.status(401).send("Auth required");
+// ---------- GitHub OAuth helpers ----------
+
+async function githubFetch(url, opts = {}) {
+  const res = await fetch(url, {
+    ...opts,
+    headers: {
+      accept: "application/json",
+      ...(opts.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub API ${res.status}: ${text}`);
   }
-  const decoded = Buffer.from(encoded, "base64").toString("utf8");
-  const idx = decoded.indexOf(":");
-  const password = idx >= 0 ? decoded.slice(idx + 1) : "";
-  if (password !== SETUP_PASSWORD) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
-    return res.status(401).send("Invalid password");
-  }
-  return next();
+  return res.json();
 }
+
+function isAuthConfigured() {
+  return Boolean(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET);
+}
+
+function requireAuth(req, res, next) {
+  // Auth routes and healthcheck are always public
+  if (
+    req.path === "/auth/github" ||
+    req.path === "/auth/github/callback" ||
+    req.path === "/auth/login" ||
+    req.path === "/setup/healthz"
+  ) {
+    return next();
+  }
+
+  // If GitHub OAuth is not configured, fall through (allow access).
+  // This lets users still complete initial setup before configuring OAuth.
+  if (!isAuthConfigured()) {
+    return next();
+  }
+
+  if (req.session?.user) {
+    return next();
+  }
+
+  // For API calls, return 401
+  if (req.path.startsWith("/setup/api/") || req.headers.accept?.includes("application/json")) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  // For page requests, redirect to login
+  return res.redirect("/auth/login");
+}
+
+// ---------- Express app ----------
 
 const app = express();
 app.disable("x-powered-by");
+app.set("trust proxy", 1); // trust Railway's reverse proxy for secure cookies
 app.use(express.json({ limit: "1mb" }));
+
+// Session middleware
+app.use(
+  session({
+    secret: SESSION_SECRET,
+    name: "openclaw.sid",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    },
+  }),
+);
+
+// ---------- Auth routes ----------
+
+function loginPageHTML(error) {
+  const errorBlock = error
+    ? `<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:0.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:0.9rem;">${error}</div>`
+    : "";
+  const notConfigured = !isAuthConfigured()
+    ? `<div style="background:#fefce8;border:1px solid #fde68a;color:#92400e;padding:0.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:0.85rem;">
+        <strong>GitHub OAuth not configured.</strong><br/>
+        Set <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> in your Railway variables.<br/>
+        Optionally set <code>GITHUB_ALLOWED_USERS</code> to restrict access (comma-separated usernames).
+      </div>`
+    : "";
+  const btnDisabled = !isAuthConfigured() ? "disabled" : "";
+  const btnStyle = !isAuthConfigured()
+    ? "opacity:0.5;cursor:not-allowed;"
+    : "cursor:pointer;";
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in - OpenClaw</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: #0a0a0a; color: #fafafa; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { background: #141414; border: 1px solid #262626; border-radius: 16px; padding: 2.5rem 2rem; max-width: 400px; width: 100%; margin: 1rem; }
+    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.25rem; text-align: center; }
+    .subtitle { color: #a3a3a3; font-size: 0.9rem; text-align: center; margin-bottom: 1.5rem; }
+    .btn-github { display: flex; align-items: center; justify-content: center; gap: 0.75rem; width: 100%; padding: 0.75rem 1.25rem; border-radius: 10px; border: 1px solid #333; background: #fafafa; color: #0a0a0a; font-size: 0.95rem; font-weight: 600; transition: all 0.15s; text-decoration: none; ${btnStyle} }
+    .btn-github:hover:not([disabled]) { background: #e5e5e5; }
+    .btn-github svg { width: 20px; height: 20px; }
+    code { background: #262626; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.8rem; color: #e5e5e5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>OpenClaw</h1>
+    <p class="subtitle">Sign in to access your instance</p>
+    ${errorBlock}
+    ${notConfigured}
+    <a href="/auth/github" class="btn-github" ${btnDisabled}>
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+      Sign in with GitHub
+    </a>
+  </div>
+</body>
+</html>`;
+}
+
+app.get("/auth/login", (req, res) => {
+  // If already logged in, redirect to home
+  if (req.session?.user) {
+    return res.redirect("/");
+  }
+  const error = req.query.error || "";
+  res.type("html").send(loginPageHTML(error));
+});
+
+app.get("/auth/github", (req, res) => {
+  if (!isAuthConfigured()) {
+    return res.redirect("/auth/login?error=" + encodeURIComponent("GitHub OAuth not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."));
+  }
+
+  const state = crypto.randomBytes(16).toString("hex");
+  req.session.oauthState = state;
+
+  const params = new URLSearchParams({
+    client_id: GITHUB_CLIENT_ID,
+    redirect_uri: `${getBaseUrl(req)}/auth/github/callback`,
+    scope: "read:user",
+    state,
+  });
+
+  res.redirect(`https://github.com/login/oauth/authorize?${params}`);
+});
+
+app.get("/auth/github/callback", async (req, res) => {
+  try {
+    const { code, state } = req.query;
+
+    if (!code || !state || state !== req.session.oauthState) {
+      return res.redirect("/auth/login?error=" + encodeURIComponent("Invalid OAuth state. Please try again."));
+    }
+    delete req.session.oauthState;
+
+    // Exchange code for access token
+    const tokenData = await githubFetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        client_secret: GITHUB_CLIENT_SECRET,
+        code,
+      }),
+    });
+
+    if (!tokenData.access_token) {
+      return res.redirect("/auth/login?error=" + encodeURIComponent("Failed to get access token from GitHub."));
+    }
+
+    // Get user info
+    const user = await githubFetch("https://api.github.com/user", {
+      headers: { authorization: `Bearer ${tokenData.access_token}` },
+    });
+
+    const username = (user.login || "").toLowerCase();
+
+    // Check allowlist
+    if (GITHUB_ALLOWED_USERS.length > 0 && !GITHUB_ALLOWED_USERS.includes(username)) {
+      return res.redirect(
+        "/auth/login?error=" +
+          encodeURIComponent(`Access denied. User "${user.login}" is not in the allowed users list.`),
+      );
+    }
+
+    // Save to session
+    req.session.user = {
+      id: user.id,
+      login: user.login,
+      avatar: user.avatar_url,
+      name: user.name || user.login,
+    };
+
+    req.session.save(() => {
+      res.redirect("/setup");
+    });
+  } catch (err) {
+    console.error("[auth] GitHub OAuth error:", err);
+    res.redirect("/auth/login?error=" + encodeURIComponent("Authentication failed. Please try again."));
+  }
+});
+
+app.get("/auth/logout", (req, res) => {
+  req.session.destroy(() => {
+    res.redirect("/auth/login");
+  });
+});
+
+app.get("/auth/me", (req, res) => {
+  if (!req.session?.user) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+  res.json({ user: req.session.user });
+});
+
+function getBaseUrl(req) {
+  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
+// Apply auth to all routes below
+app.use(requireAuth);
 
 // Minimal health endpoint for Railway.
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
-app.get("/setup/app.js", requireSetupAuth, (_req, res) => {
+app.get("/setup/app.js", (_req, res) => {
   // Serve JS for /setup (kept external to avoid inline encoding/template issues)
   res.type("application/javascript");
   res.send(fs.readFileSync(path.join(process.cwd(), "src", "setup-app.js"), "utf8"));
 });
 
-app.get("/setup", requireSetupAuth, (_req, res) => {
+app.get("/setup", (_req, res) => {
+  const user = req.session?.user;
+  const userBar = user
+    ? `<div class="user-bar">
+        <div style="display:flex;align-items:center;gap:0.5rem;">
+          <img src="${user.avatar}" alt="" style="width:24px;height:24px;border-radius:50%;" />
+          <span style="font-size:0.85rem;color:#a3a3a3;">${user.name || user.login}</span>
+        </div>
+        <a href="/auth/logout" style="font-size:0.85rem;color:#a3a3a3;text-decoration:none;">Sign out</a>
+      </div>`
+    : "";
+
   res.type("html").send(`<!doctype html>
 <html>
 <head>
@@ -292,42 +516,44 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
   <title>OpenClaw Setup</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: #fafafa; color: #111; line-height: 1.5; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: #0a0a0a; color: #fafafa; line-height: 1.5; }
     .wrap { max-width: 620px; margin: 0 auto; padding: 2rem 1.25rem; }
+    .user-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; padding: 0.5rem 0; border-bottom: 1px solid #262626; }
     h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.25rem; }
-    .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }
-    .status-bar { background: #fff; border: 1px solid #e5e5e5; border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #d4d4d4; flex-shrink: 0; }
+    .subtitle { color: #a3a3a3; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .status-bar { background: #141414; border: 1px solid #262626; border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #525252; flex-shrink: 0; }
     .status-dot.ok { background: #22c55e; }
     .status-dot.err { background: #ef4444; }
     .status-text { flex: 1; font-size: 0.9rem; }
-    .status-links a { font-size: 0.85rem; color: #2563eb; text-decoration: none; }
+    .status-links a { font-size: 0.85rem; color: #60a5fa; text-decoration: none; }
     .status-links a:hover { text-decoration: underline; }
-    .card { background: #fff; border: 1px solid #e5e5e5; border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; }
+    .card { background: #141414; border: 1px solid #262626; border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; }
     .card h2 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; }
-    .hint { color: #666; font-size: 0.85rem; margin-bottom: 0.75rem; }
-    label { display: block; margin-top: 0.75rem; font-size: 0.85rem; font-weight: 600; color: #333; }
-    input, select, textarea { width: 100%; padding: 0.55rem 0.75rem; margin-top: 0.3rem; border: 1px solid #d4d4d4; border-radius: 8px; font-size: 0.9rem; background: #fff; color: #111; outline: none; }
-    input:focus, select:focus, textarea:focus { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
-    .model-hint { color: #888; font-size: 0.8rem; margin-top: 0.25rem; }
+    .hint { color: #a3a3a3; font-size: 0.85rem; margin-bottom: 0.75rem; }
+    label { display: block; margin-top: 0.75rem; font-size: 0.85rem; font-weight: 600; color: #d4d4d4; }
+    input, select, textarea { width: 100%; padding: 0.55rem 0.75rem; margin-top: 0.3rem; border: 1px solid #333; border-radius: 8px; font-size: 0.9rem; background: #1a1a1a; color: #fafafa; outline: none; }
+    input:focus, select:focus, textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(96,165,250,0.2); }
+    .model-hint { color: #737373; font-size: 0.8rem; margin-top: 0.25rem; }
     .btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.6rem 1.25rem; border-radius: 8px; border: 0; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
     .btn:hover { opacity: 0.85; }
-    .btn-primary { background: #111; color: #fff; }
-    .btn-secondary { background: #e5e5e5; color: #333; }
-    .btn-danger { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+    .btn-primary { background: #fafafa; color: #0a0a0a; }
+    .btn-secondary { background: #262626; color: #d4d4d4; }
+    .btn-danger { background: #1c0a0a; color: #f87171; border: 1px solid #7f1d1d; }
     .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #f5f5f5; border-radius: 8px; padding: 0.75rem; font-size: 0.8rem; margin-top: 0.75rem; max-height: 300px; overflow-y: auto; display: none; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #1a1a1a; border: 1px solid #262626; border-radius: 8px; padding: 0.75rem; font-size: 0.8rem; margin-top: 0.75rem; max-height: 300px; overflow-y: auto; display: none; color: #d4d4d4; }
     pre.visible { display: block; }
-    .toggle { font-size: 0.85rem; color: #2563eb; cursor: pointer; border: 0; background: 0; padding: 0; margin-top: 1rem; }
+    .toggle { font-size: 0.85rem; color: #60a5fa; cursor: pointer; border: 0; background: 0; padding: 0; margin-top: 1rem; }
     .toggle:hover { text-decoration: underline; }
     .advanced { display: none; }
     .advanced.open { display: block; }
-    .divider { border: 0; border-top: 1px solid #e5e5e5; margin: 1rem 0; }
-    code { background: #f0f0f0; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.85rem; }
+    .divider { border: 0; border-top: 1px solid #262626; margin: 1rem 0; }
+    code { background: #262626; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.85rem; color: #e5e5e5; }
   </style>
 </head>
 <body>
   <div class="wrap">
+    ${userBar}
     <h1>OpenClaw Setup</h1>
     <p class="subtitle">Configure your OpenClaw instance in a few steps.</p>
 
@@ -459,7 +685,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
 </html>`);
 });
 
-app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
+app.get("/setup/api/status", async (_req, res) => {
   const version = await runCmd(OPENCLAW_NODE, clawArgs(["--version"]));
 
   res.json({
@@ -554,7 +780,7 @@ function runCmd(cmd, args, opts = {}) {
   });
 }
 
-app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
+app.post("/setup/api/run", async (req, res) => {
   try {
     if (isConfigured()) {
       await ensureGatewayRunning();
@@ -673,7 +899,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   }
 });
 
-app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
+app.get("/setup/api/debug", async (_req, res) => {
   const v = await runCmd(OPENCLAW_NODE, clawArgs(["--version"]));
   const help = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
   res.json({
@@ -723,7 +949,7 @@ const ALLOWED_CONSOLE_COMMANDS = new Set([
   "openclaw.config.get",
 ]);
 
-app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
+app.post("/setup/api/console/run", async (req, res) => {
   const payload = req.body || {};
   const cmd = String(payload.cmd || "").trim();
   const arg = String(payload.arg || "").trim();
@@ -783,7 +1009,7 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
   }
 });
 
-app.get("/setup/api/config/raw", requireSetupAuth, async (_req, res) => {
+app.get("/setup/api/config/raw", async (_req, res) => {
   try {
     const p = configPath();
     const exists = fs.existsSync(p);
@@ -794,7 +1020,7 @@ app.get("/setup/api/config/raw", requireSetupAuth, async (_req, res) => {
   }
 });
 
-app.post("/setup/api/config/raw", requireSetupAuth, async (req, res) => {
+app.post("/setup/api/config/raw", async (req, res) => {
   try {
     const content = String((req.body && req.body.content) || "");
     if (content.length > 500_000) {
@@ -823,7 +1049,7 @@ app.post("/setup/api/config/raw", requireSetupAuth, async (req, res) => {
   }
 });
 
-app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
+app.post("/setup/api/pairing/approve", async (req, res) => {
   const { channel, code } = req.body || {};
   if (!channel || !code) {
     return res.status(400).json({ ok: false, error: "Missing channel or code" });
@@ -832,7 +1058,7 @@ app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
   return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: r.output });
 });
 
-app.post("/setup/api/reset", requireSetupAuth, async (_req, res) => {
+app.post("/setup/api/reset", async (_req, res) => {
   // Minimal reset: delete the config file so /setup can rerun.
   // Keep credentials/sessions/workspace by default.
   try {
@@ -843,7 +1069,7 @@ app.post("/setup/api/reset", requireSetupAuth, async (_req, res) => {
   }
 });
 
-app.get("/setup/export", requireSetupAuth, async (_req, res) => {
+app.get("/setup/export", async (_req, res) => {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
@@ -930,7 +1156,7 @@ async function readBodyBuffer(req, maxBytes) {
 
 // Import a backup created by /setup/export.
 // This is intentionally limited to restoring into /data to avoid overwriting arbitrary host paths.
-app.post("/setup/import", requireSetupAuth, async (req, res) => {
+app.post("/setup/import", async (req, res) => {
   try {
     const dataRoot = "/data";
     if (!isUnderDir(STATE_DIR, dataRoot) || !isUnderDir(WORKSPACE_DIR, dataRoot)) {
@@ -1016,11 +1242,18 @@ const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`[wrapper] workspace dir: ${WORKSPACE_DIR}`);
   console.log(`[wrapper] gateway token: ${OPENCLAW_GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
   console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
-  if (SETUP_PASSWORD_WAS_GENERATED) {
+  if (isAuthConfigured()) {
+    console.log(`[wrapper] auth: GitHub OAuth (client_id=${GITHUB_CLIENT_ID.slice(0, 8)}...)`);
+    if (GITHUB_ALLOWED_USERS.length > 0) {
+      console.log(`[wrapper] allowed users: ${GITHUB_ALLOWED_USERS.join(", ")}`);
+    } else {
+      console.log(`[wrapper] allowed users: (any GitHub user)`);
+    }
+  } else {
     console.log(`[wrapper] ================================================`);
-    console.log(`[wrapper] SETUP_PASSWORD was auto-generated: ${SETUP_PASSWORD}`);
-    console.log(`[wrapper] Use this password to access /setup`);
-    console.log(`[wrapper] For production, set SETUP_PASSWORD in Railway Variables`);
+    console.log(`[wrapper] WARNING: GitHub OAuth not configured!`);
+    console.log(`[wrapper] Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET`);
+    console.log(`[wrapper] in your Railway variables to protect this instance.`);
     console.log(`[wrapper] ================================================`);
   }
   // Don't start gateway unless configured; proxy will ensure it starts.
@@ -1031,6 +1264,28 @@ server.on("upgrade", async (req, socket, head) => {
     socket.destroy();
     return;
   }
+
+  // For WebSocket upgrades, parse the session cookie to verify auth.
+  // The session middleware doesn't run on raw upgrade events, so we
+  // create a minimal fake response to invoke the session parser.
+  if (isAuthConfigured()) {
+    const authenticated = await new Promise((resolve) => {
+      const fakeRes = { end() {}, setHeader() {}, getHeader() { return undefined; } };
+      session({
+        secret: SESSION_SECRET,
+        name: "openclaw.sid",
+        resave: false,
+        saveUninitialized: false,
+      })(req, fakeRes, () => {
+        resolve(Boolean(req.session?.user));
+      });
+    });
+    if (!authenticated) {
+      socket.destroy();
+      return;
+    }
+  }
+
   try {
     await ensureGatewayRunning();
   } catch {
