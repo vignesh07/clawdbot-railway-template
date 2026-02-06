@@ -151,6 +151,7 @@
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload)
     }).then(function (res) {
+      if (res.status === 401) { window.location.href = '/auth/login'; return new Promise(function () {}); }
       return res.text();
     }).then(function (text) {
       var j;
@@ -167,7 +168,7 @@
     if (!confirm('Reset setup? This deletes the config file so onboarding can run again.')) return;
     showLog('Resetting...\n');
     fetch('/setup/api/reset', { method: 'POST', credentials: 'same-origin' })
-      .then(function (res) { return res.text(); })
+      .then(function (res) { if (res.status === 401) { window.location.href = '/auth/login'; return new Promise(function () {}); } return res.text(); })
       .then(function (t) { appendLog(t + '\n'); return refreshStatus(); })
       .catch(function (e) { appendLog('Error: ' + String(e) + '\n'); });
   };
