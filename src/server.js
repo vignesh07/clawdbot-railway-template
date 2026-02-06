@@ -159,8 +159,11 @@ async function startGateway() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  // Ensure the config file always has the proxy-trust and auth settings the
-  // wrapper needs, even for configs created before this code was deployed.
+  // The internal gateway is bound to loopback and only reachable via the
+  // wrapper proxy, so we disable auth on it entirely. The wrapper handles
+  // external authentication (Basic auth on /setup). This avoids the "gateway
+  // token mismatch" error that occurs because the Control UI SPA authenticates
+  // at the WebSocket application-protocol level, which the proxy cannot inject.
   try {
     const cfgFile = configPath();
     const cfg = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
@@ -168,36 +171,17 @@ async function startGateway() {
 
     if (!cfg.gateway) cfg.gateway = {};
     if (!cfg.gateway.auth) cfg.gateway.auth = {};
-    if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
 
-    // Trust the wrapper proxy so forwarded headers are honored.
-    if (!Array.isArray(cfg.gateway.trustedProxies) || !cfg.gateway.trustedProxies.includes("127.0.0.1")) {
-      cfg.gateway.trustedProxies = ["127.0.0.1"];
-      dirty = true;
-    }
-
-    // Allow the Control UI to use token-only auth over the internal HTTP link.
-    if (cfg.gateway.controlUi.allowInsecureAuth !== true) {
-      cfg.gateway.controlUi.allowInsecureAuth = true;
-      dirty = true;
-    }
-
-    // Disable Tailscale identity headers (we are behind our own proxy, not Tailscale Serve).
-    if (cfg.gateway.auth.allowTailscale !== false) {
-      cfg.gateway.auth.allowTailscale = false;
-      dirty = true;
-    }
-
-    // Keep the auth token in sync with the wrapper's token.
-    if (cfg.gateway.auth.token !== OPENCLAW_GATEWAY_TOKEN) {
-      cfg.gateway.auth.mode = "token";
-      cfg.gateway.auth.token = OPENCLAW_GATEWAY_TOKEN;
+    // Disable gateway auth -- the wrapper proxy is the only client.
+    if (cfg.gateway.auth.mode !== "none") {
+      cfg.gateway.auth.mode = "none";
+      delete cfg.gateway.auth.token;
       dirty = true;
     }
 
     if (dirty) {
       fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2), "utf8");
-      console.log("[wrapper] patched gateway config with proxy-trust settings");
+      console.log("[wrapper] patched gateway config: auth set to none (loopback only)");
     }
   } catch (err) {
     console.warn(`[wrapper] could not patch gateway config: ${err.message}`);
@@ -211,9 +195,7 @@ async function startGateway() {
     "--port",
     String(INTERNAL_GATEWAY_PORT),
     "--auth",
-    "token",
-    "--token",
-    OPENCLAW_GATEWAY_TOKEN,
+    "none",
   ];
 
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
@@ -592,22 +574,12 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
   // Optional channel setup (only after successful onboarding, and only if the installed CLI supports it).
   if (ok) {
-    // Ensure gateway token is written into config so the browser UI can authenticate reliably.
-    // (We also enforce loopback bind since the wrapper proxies externally.)
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
+    // The internal gateway is bound to loopback and only reachable through
+    // the wrapper proxy, so we disable auth entirely to avoid "token mismatch"
+    // errors. The wrapper's SETUP_PASSWORD protects /setup externally.
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "none"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
-
-    // Trust the wrapper proxy (127.0.0.1) so forwarded headers are honored.
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.trustedProxies", '["127.0.0.1"]']));
-
-    // The Control UI is served over HTTP internally (the proxy handles HTTPS externally via Railway).
-    // Allow insecure auth so the UI can fall back to token-only auth without a secure context.
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.controlUi.allowInsecureAuth", "true"]));
-
-    // Disable Tailscale identity headers since we are behind our own reverse proxy.
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.allowTailscale", "false"]));
 
     // Ensure model is written into config (important for OpenRouter where the CLI may not
     // recognise --model during non-interactive onboarding).
@@ -1021,26 +993,6 @@ proxy.on("error", (err, _req, _res) => {
   console.error("[proxy]", err);
 });
 
-// Inject the gateway token into proxied requests so the internal gateway
-// authenticates them. The browser never needs to know the real token.
-function injectGatewayToken(proxyReq) {
-  if (OPENCLAW_GATEWAY_TOKEN) {
-    proxyReq.setHeader("Authorization", `Bearer ${OPENCLAW_GATEWAY_TOKEN}`);
-  }
-}
-
-proxy.on("proxyReq", (_proxyReq) => {
-  injectGatewayToken(_proxyReq);
-});
-
-// For WebSocket upgrades, append the token as a query parameter so the
-// gateway's WS handler can authenticate the connection.
-function injectWsToken(req) {
-  if (!OPENCLAW_GATEWAY_TOKEN) return;
-  const sep = req.url.includes("?") ? "&" : "?";
-  req.url = `${req.url}${sep}token=${encodeURIComponent(OPENCLAW_GATEWAY_TOKEN)}`;
-}
-
 app.use(async (req, res) => {
   // If not configured, force users to /setup for any non-setup routes.
   if (!isConfigured() && !req.path.startsWith("/setup")) {
@@ -1052,27 +1004,6 @@ app.use(async (req, res) => {
       await ensureGatewayRunning();
     } catch (err) {
       return res.status(503).type("text/plain").send(`Gateway not ready: ${String(err)}`);
-    }
-  }
-
-  // The Control UI reads the gateway token from the `token` query parameter
-  // and stores it in localStorage for WebSocket authentication.
-  // Inject it automatically so users never need to paste the token manually.
-  // Use a cookie to avoid redirect loops (the UI strips `token` from the URL
-  // after storing it, so we only redirect once per browser).
-  if (
-    OPENCLAW_GATEWAY_TOKEN &&
-    req.method === "GET" &&
-    req.accepts("html") &&
-    !req.query.token &&
-    !req.headers.cookie?.includes("_oc_tok_injected=1")
-  ) {
-    const uiPaths = ["/", "/openclaw", "/openclaw/", "/clawdbot", "/clawdbot/"];
-    if (uiPaths.includes(req.path)) {
-      // Set a session cookie so we don't redirect again.
-      res.cookie("_oc_tok_injected", "1", { httpOnly: true, sameSite: "lax" });
-      const sep = req.originalUrl.includes("?") ? "&" : "?";
-      return res.redirect(`${req.originalUrl}${sep}token=${encodeURIComponent(OPENCLAW_GATEWAY_TOKEN)}`);
     }
   }
 
@@ -1106,8 +1037,6 @@ server.on("upgrade", async (req, socket, head) => {
     socket.destroy();
     return;
   }
-  // Inject token into the WS upgrade so the gateway authenticates it.
-  injectWsToken(req);
   proxy.ws(req, socket, head, { target: GATEWAY_TARGET });
 });
 
