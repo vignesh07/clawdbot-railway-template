@@ -765,6 +765,7 @@ function buildOnboardArgs(payload) {
 }
 
 function runCmd(cmd, args, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? 60_000; // default 60s
   return new Promise((resolve) => {
     const proc = childProcess.spawn(cmd, args, {
       ...opts,
@@ -779,15 +780,31 @@ function runCmd(cmd, args, opts = {}) {
     });
 
     let out = "";
+    let settled = false;
+
+    const finish = (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code: code ?? 0, output: out });
+    };
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      out += `\n[timeout] command killed after ${timeoutMs / 1000}s\n`;
+      try { proc.kill("SIGKILL"); } catch {}
+      finish(124); // exit code 124 = timeout (matches GNU timeout convention)
+    }, timeoutMs);
+
     proc.stdout?.on("data", (d) => (out += d.toString("utf8")));
     proc.stderr?.on("data", (d) => (out += d.toString("utf8")));
 
     proc.on("error", (err) => {
       out += `\n[spawn error] ${String(err)}\n`;
-      resolve({ code: 127, output: out });
+      finish(127);
     });
 
-    proc.on("close", (code) => resolve({ code: code ?? 0, output: out }));
+    proc.on("close", (code) => finish(code));
   });
 }
 
@@ -814,9 +831,10 @@ app.post("/setup/api/run", async (req, res) => {
     // The internal gateway is bound to loopback and only reachable through
     // the wrapper proxy, so we disable auth entirely to avoid "token mismatch"
     // errors. The wrapper's GitHub OAuth session protects all routes externally.
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "none"]));
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
+    const cfgOpts = { timeoutMs: 10_000 };
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "none"]), cfgOpts);
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]), cfgOpts);
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]), cfgOpts);
 
     // Ensure model is written into config (important for OpenRouter where the CLI may not
     // recognise --model during non-interactive onboarding).
@@ -896,8 +914,13 @@ app.post("/setup/api/run", async (req, res) => {
       }
     }
 
-    // Apply changes immediately.
-    await restartGateway();
+    // Start gateway in the background -- don't block the HTTP response.
+    // Railway's proxy has a ~30s timeout and the full setup chain above
+    // can exceed that if we also wait for the gateway to become ready.
+    restartGateway().catch((err) => {
+      console.error("[/setup/api/run] background gateway start failed:", err);
+    });
+    extra += "\n[gateway] starting in background...\n";
   }
 
   return res.status(ok ? 200 : 500).json({
