@@ -346,48 +346,79 @@ app.use(session(SESSION_CONFIG));
 
 function loginPageHTML(error) {
   const errorBlock = error
-    ? `<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:0.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:0.9rem;">${escapeHtml(error)}</div>`
+    ? `<div class="alert alert-error">${escapeHtml(error)}</div>`
     : "";
   const notConfigured = !isAuthConfigured()
-    ? `<div style="background:#fefce8;border:1px solid #fde68a;color:#92400e;padding:0.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:0.85rem;">
+    ? `<div class="alert alert-warn">
         <strong>GitHub OAuth not configured.</strong><br/>
         Set <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> in your Railway variables.<br/>
-        Optionally set <code>GITHUB_ALLOWED_USERS</code> to restrict access (comma-separated usernames).
+        Optionally set <code>GITHUB_ALLOWED_USERS</code> to restrict access.
       </div>`
     : "";
   const btnDisabled = !isAuthConfigured() ? "disabled" : "";
-  const btnStyle = !isAuthConfigured()
-    ? "opacity:0.5;cursor:not-allowed;"
-    : "cursor:pointer;";
+  const btnCls = !isAuthConfigured() ? "btn-github disabled" : "btn-github";
 
   return `<!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Sign in - OpenClaw</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: #0a0a0a; color: #fafafa; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-    .card { background: #141414; border: 1px solid #262626; border-radius: 16px; padding: 2.5rem 2rem; max-width: 400px; width: 100%; margin: 1rem; }
-    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.25rem; text-align: center; }
-    .subtitle { color: #a3a3a3; font-size: 0.9rem; text-align: center; margin-bottom: 1.5rem; }
-    .btn-github { display: flex; align-items: center; justify-content: center; gap: 0.75rem; width: 100%; padding: 0.75rem 1.25rem; border-radius: 10px; border: 1px solid #333; background: #fafafa; color: #0a0a0a; font-size: 0.95rem; font-weight: 600; transition: all 0.15s; text-decoration: none; ${btnStyle} }
-    .btn-github:hover:not([disabled]) { background: #e5e5e5; }
-    .btn-github svg { width: 20px; height: 20px; }
-    code { background: #262626; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.8rem; color: #e5e5e5; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #09090b; color: #fafafa; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .login-wrapper { width: 100%; max-width: 380px; padding: 1.5rem; }
+    .logo-mark {
+      width: 48px; height: 48px; border-radius: 14px;
+      background: linear-gradient(135deg, #18181b 0%, #27272a 100%);
+      border: 1px solid #3f3f46;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 1.5rem;
+    }
+    .logo-mark svg { width: 24px; height: 24px; color: #fafafa; }
+    h1 { font-size: 1.25rem; font-weight: 600; text-align: center; letter-spacing: -0.01em; }
+    .subtitle { color: #71717a; font-size: 0.875rem; text-align: center; margin-top: 0.375rem; margin-bottom: 2rem; }
+    .alert {
+      padding: 0.75rem 1rem; border-radius: 10px; font-size: 0.8125rem;
+      margin-bottom: 1.25rem; line-height: 1.5;
+    }
+    .alert-error { background: #1c0a0a; border: 1px solid #7f1d1d; color: #fca5a5; }
+    .alert-warn { background: #1a1500; border: 1px solid #854d0e; color: #fde68a; }
+    .alert code { background: #27272a; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.75rem; color: #e4e4e7; }
+    .btn-github {
+      display: flex; align-items: center; justify-content: center; gap: 0.625rem;
+      width: 100%; padding: 0.75rem 1rem; border-radius: 10px; border: 1px solid #27272a;
+      background: #fafafa; color: #09090b; font-size: 0.875rem; font-weight: 600;
+      cursor: pointer; transition: background 0.15s, transform 0.1s;
+      text-decoration: none;
+    }
+    .btn-github:hover { background: #e4e4e7; }
+    .btn-github:active { transform: scale(0.985); }
+    .btn-github.disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+    .btn-github svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .footer-text { text-align: center; margin-top: 2rem; font-size: 0.75rem; color: #52525b; }
+    .footer-text a { color: #71717a; text-decoration: none; }
+    .footer-text a:hover { color: #a1a1aa; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>OpenClaw</h1>
-    <p class="subtitle">Sign in to access your instance</p>
+  <div class="login-wrapper">
+    <div class="logo-mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+    </div>
+    <h1>Welcome to OpenClaw</h1>
+    <p class="subtitle">Sign in to manage your instance</p>
     ${errorBlock}
     ${notConfigured}
-    <a href="/auth/github" class="btn-github" ${btnDisabled}>
+    <a href="/auth/github" class="${btnCls}" ${btnDisabled}>
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-      Sign in with GitHub
+      Continue with GitHub
     </a>
+    <p class="footer-text">Secured by GitHub OAuth</p>
   </div>
 </body>
 </html>`;
@@ -509,137 +540,357 @@ app.get("/setup/app.js", (_req, res) => {
 
 app.get("/setup", (req, res) => {
   const user = req.session?.user;
-  const userBar = user
-    ? `<div class="user-bar">
-        <div style="display:flex;align-items:center;gap:0.5rem;">
-          <img src="${escapeHtml(user.avatar)}" alt="" style="width:24px;height:24px;border-radius:50%;" />
-          <span style="font-size:0.85rem;color:#a3a3a3;">${escapeHtml(user.name || user.login)}</span>
-        </div>
-        <a href="/auth/logout" style="font-size:0.85rem;color:#a3a3a3;text-decoration:none;">Sign out</a>
-      </div>`
+  const avatarHtml = user
+    ? `<img src="${escapeHtml(user.avatar)}" alt="" class="avatar" /><span class="user-name">${escapeHtml(user.name || user.login)}</span>`
     : "";
+  const signOutHtml = user ? `<a href="/auth/logout" class="nav-link">Sign out</a>` : "";
 
   res.type("html").send(`<!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenClaw Setup</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: #0a0a0a; color: #fafafa; line-height: 1.5; }
-    .wrap { max-width: 620px; margin: 0 auto; padding: 2rem 1.25rem; }
-    .user-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; padding: 0.5rem 0; border-bottom: 1px solid #262626; }
-    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.25rem; }
-    .subtitle { color: #a3a3a3; font-size: 0.9rem; margin-bottom: 1.5rem; }
-    .status-bar { background: #141414; border: 1px solid #262626; border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #525252; flex-shrink: 0; }
-    .status-dot.ok { background: #22c55e; }
-    .status-dot.err { background: #ef4444; }
-    .status-text { flex: 1; font-size: 0.9rem; }
-    .status-links a { font-size: 0.85rem; color: #60a5fa; text-decoration: none; }
-    .status-links a:hover { text-decoration: underline; }
-    .card { background: #141414; border: 1px solid #262626; border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; }
-    .card h2 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.5rem; }
-    .hint { color: #a3a3a3; font-size: 0.85rem; margin-bottom: 0.75rem; }
-    label { display: block; margin-top: 0.75rem; font-size: 0.85rem; font-weight: 600; color: #d4d4d4; }
-    input, select, textarea { width: 100%; padding: 0.55rem 0.75rem; margin-top: 0.3rem; border: 1px solid #333; border-radius: 8px; font-size: 0.9rem; background: #1a1a1a; color: #fafafa; outline: none; }
-    input:focus, select:focus, textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(96,165,250,0.2); }
-    .model-hint { color: #737373; font-size: 0.8rem; margin-top: 0.25rem; }
-    .btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.6rem 1.25rem; border-radius: 8px; border: 0; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
-    .btn:hover { opacity: 0.85; }
-    .btn-primary { background: #fafafa; color: #0a0a0a; }
-    .btn-secondary { background: #262626; color: #d4d4d4; }
-    .btn-danger { background: #1c0a0a; color: #f87171; border: 1px solid #7f1d1d; }
-    .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #1a1a1a; border: 1px solid #262626; border-radius: 8px; padding: 0.75rem; font-size: 0.8rem; margin-top: 0.75rem; max-height: 300px; overflow-y: auto; display: none; color: #d4d4d4; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #09090b;
+      --surface: #18181b;
+      --surface-2: #27272a;
+      --border: #27272a;
+      --border-hover: #3f3f46;
+      --text: #fafafa;
+      --text-muted: #a1a1aa;
+      --text-dim: #71717a;
+      --accent: #3b82f6;
+      --accent-muted: rgba(59, 130, 246, 0.15);
+      --success: #22c55e;
+      --success-muted: rgba(34, 197, 94, 0.12);
+      --danger: #ef4444;
+      --danger-muted: rgba(239, 68, 68, 0.1);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    }
+
+    body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; }
+
+    /* ---- Top nav ---- */
+    .topbar {
+      position: sticky; top: 0; z-index: 50;
+      background: rgba(9,9,11,0.85); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem; height: 56px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 0.75rem; }
+    .topbar-brand { font-weight: 600; font-size: 0.9375rem; letter-spacing: -0.01em; color: var(--text); text-decoration: none; }
+    .avatar { width: 24px; height: 24px; border-radius: 50%; }
+    .user-name { font-size: 0.8125rem; color: var(--text-muted); }
+    .topbar-right { display: flex; align-items: center; gap: 1rem; }
+    .nav-link { font-size: 0.8125rem; color: var(--text-dim); text-decoration: none; transition: color 0.15s; }
+    .nav-link:hover { color: var(--text-muted); }
+    .open-ui-btn {
+      display: inline-flex; align-items: center; gap: 0.375rem;
+      font-size: 0.8125rem; font-weight: 500; color: var(--accent);
+      text-decoration: none; padding: 0.375rem 0.75rem;
+      border: 1px solid rgba(59,130,246,0.25); border-radius: var(--radius-sm);
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .open-ui-btn:hover { background: var(--accent-muted); border-color: rgba(59,130,246,0.4); }
+    .open-ui-btn svg { width: 14px; height: 14px; }
+
+    /* ---- Layout ---- */
+    .shell { max-width: 640px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+    /* ---- Status banner ---- */
+    .status-banner {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.875rem 1rem; border-radius: var(--radius);
+      border: 1px solid var(--border); background: var(--surface);
+      margin-bottom: 2rem;
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #52525b; flex-shrink: 0; }
+    .status-dot.ok { background: var(--success); box-shadow: 0 0 8px rgba(34,197,94,0.4); }
+    .status-dot.err { background: var(--danger); box-shadow: 0 0 8px rgba(239,68,68,0.3); }
+    .status-text { flex: 1; font-size: 0.8125rem; color: var(--text-muted); }
+
+    /* ---- Tabs ---- */
+    .tabs {
+      display: flex; gap: 0; border-bottom: 1px solid var(--border);
+      margin-bottom: 1.5rem; overflow-x: auto;
+    }
+    .tab {
+      padding: 0.625rem 1rem; font-size: 0.8125rem; font-weight: 500;
+      color: var(--text-dim); cursor: pointer; border: 0; background: 0;
+      border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s;
+      white-space: nowrap; font-family: var(--font);
+    }
+    .tab:hover { color: var(--text-muted); }
+    .tab.active { color: var(--text); border-bottom-color: var(--text); }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ---- Cards ---- */
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1rem;
+      transition: border-color 0.15s;
+    }
+    .card:hover { border-color: var(--border-hover); }
+    .card-header { margin-bottom: 1rem; }
+    .card-title { font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.01em; }
+    .card-desc { font-size: 0.8125rem; color: var(--text-dim); margin-top: 0.25rem; }
+
+    /* ---- Forms ---- */
+    .field { margin-bottom: 1rem; }
+    .field-label { display: block; font-size: 0.8125rem; font-weight: 500; color: var(--text-muted); margin-bottom: 0.375rem; }
+    .field-hint { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.25rem; line-height: 1.4; }
+    input, select, textarea {
+      width: 100%; padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      font-size: 0.875rem; background: var(--bg); color: var(--text);
+      outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+      font-family: var(--font);
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted);
+    }
+    input[type="password"] { font-family: var(--font-mono); letter-spacing: 0.05em; }
+    select { cursor: pointer; }
+
+    /* ---- Buttons ---- */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem;
+      padding: 0.5rem 1rem; border-radius: var(--radius-sm); border: 1px solid transparent;
+      font-size: 0.8125rem; font-weight: 600; cursor: pointer;
+      transition: background 0.15s, transform 0.1s, opacity 0.15s;
+      font-family: var(--font);
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn-primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-secondary { background: var(--surface-2); color: var(--text-muted); border-color: var(--border); }
+    .btn-secondary:hover { background: #3f3f46; color: var(--text); }
+    .btn-danger { background: var(--danger-muted); color: #fca5a5; border-color: #7f1d1d; }
+    .btn-danger:hover { background: rgba(239,68,68,0.18); }
+    .btn-ghost { background: transparent; color: var(--text-dim); }
+    .btn-ghost:hover { color: var(--text-muted); background: var(--surface); }
+    .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+    /* ---- Channel cards ---- */
+    .channel-grid { display: flex; flex-direction: column; gap: 0.75rem; }
+    .channel-card {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      overflow: hidden; transition: border-color 0.15s;
+    }
+    .channel-card:hover { border-color: var(--border-hover); }
+    .channel-header {
+      display: flex; align-items: center; gap: 0.625rem;
+      padding: 0.75rem 1rem; background: var(--surface); cursor: pointer;
+      border: 0; width: 100%; text-align: left; color: var(--text);
+      font-family: var(--font); font-size: 0.8125rem; font-weight: 500;
+    }
+    .channel-header:hover { background: rgba(39,39,42,0.8); }
+    .channel-icon { width: 20px; height: 20px; flex-shrink: 0; color: var(--text-dim); }
+    .channel-name { flex: 1; }
+    .channel-toggle { font-size: 0.75rem; color: var(--text-dim); transition: transform 0.2s; }
+    .channel-body { padding: 0 1rem 1rem; display: none; background: var(--surface); }
+    .channel-card.open .channel-body { display: block; }
+    .channel-card.open .channel-toggle { transform: rotate(180deg); }
+
+    /* ---- Console ---- */
+    .console-bar { display: flex; gap: 0.5rem; align-items: center; }
+    .console-bar select { flex: 2; }
+    .console-bar input { flex: 1; }
+
+    /* ---- Output log ---- */
+    pre {
+      white-space: pre-wrap; word-break: break-word;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 0.75rem;
+      font-family: var(--font-mono); font-size: 0.75rem;
+      margin-top: 0.75rem; max-height: 280px; overflow-y: auto;
+      display: none; color: var(--text-muted); line-height: 1.6;
+    }
     pre.visible { display: block; }
-    .toggle { font-size: 0.85rem; color: #60a5fa; cursor: pointer; border: 0; background: 0; padding: 0; margin-top: 1rem; }
-    .toggle:hover { text-decoration: underline; }
-    .advanced { display: none; }
-    .advanced.open { display: block; }
-    .divider { border: 0; border-top: 1px solid #262626; margin: 1rem 0; }
-    code { background: #262626; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.85rem; color: #e5e5e5; }
+
+    code {
+      background: var(--surface-2); padding: 0.1rem 0.3rem;
+      border-radius: 3px; font-size: 0.8em; color: #e4e4e7;
+      font-family: var(--font-mono);
+    }
+
+    .separator { border: 0; border-top: 1px solid var(--border); margin: 1rem 0; }
+
+    /* ---- Responsive ---- */
+    @media (max-width: 480px) {
+      .shell { padding: 1.25rem 1rem 3rem; }
+      .topbar { padding: 0 1rem; }
+      .tab { padding: 0.5rem 0.75rem; font-size: 0.75rem; }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    ${userBar}
-    <h1>OpenClaw Setup</h1>
-    <p class="subtitle">Configure your OpenClaw instance in a few steps.</p>
 
-    <div class="status-bar">
+  <nav class="topbar" role="navigation">
+    <div class="topbar-left">
+      <a href="/setup" class="topbar-brand">OpenClaw</a>
+      <span style="color:var(--text-dim);font-size:0.75rem;">Setup</span>
+    </div>
+    <div class="topbar-right">
+      ${avatarHtml}
+      <a href="/openclaw" target="_blank" class="open-ui-btn" id="openUiLink">
+        Open UI
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      </a>
+      ${signOutHtml}
+    </div>
+  </nav>
+
+  <main class="shell">
+
+    <!-- Status -->
+    <div class="status-banner">
       <span class="status-dot" id="statusDot"></span>
-      <span class="status-text" id="status">Loading...</span>
-      <span class="status-links">
-        <a href="/openclaw" target="_blank">Open UI</a>
-      </span>
+      <span class="status-text" id="status">Checking status...</span>
     </div>
 
-    <div class="card">
-      <h2>Provider</h2>
-      <p class="hint">Pick the AI provider and paste your API key.</p>
-
-      <label>Provider</label>
-      <select id="authChoice">
-        <option value="openrouter-api-key">OpenRouter</option>
-        <option value="openai-api-key">OpenAI</option>
-        <option value="apiKey">Anthropic</option>
-        <option value="gemini-api-key">Google Gemini</option>
-        <option value="ai-gateway-api-key">Vercel AI Gateway</option>
-        <option value="moonshot-api-key">Moonshot AI</option>
-        <option value="minimax-api">MiniMax</option>
-        <option value="claude-cli">Anthropic (Claude CLI token)</option>
-        <option value="codex-cli">OpenAI (Codex CLI OAuth)</option>
-      </select>
-
-      <label>API Key</label>
-      <input id="authSecret" type="password" placeholder="sk-or-v1-... / sk-..." autocomplete="off" />
-
-      <label id="modelLabel">Model</label>
-      <input id="model" type="text" placeholder="anthropic/claude-sonnet-4" autocomplete="off" />
-      <div class="model-hint" id="modelHint">
-        OpenRouter format: <code>provider/model-name</code>. Examples: <code>anthropic/claude-sonnet-4</code>, <code>openai/gpt-4o</code>, <code>google/gemini-2.5-pro</code>
-      </div>
-
-      <input type="hidden" id="flow" value="quickstart" />
+    <!-- Tabs -->
+    <div class="tabs" role="tablist">
+      <button class="tab active" role="tab" data-tab="setup" aria-selected="true">Setup</button>
+      <button class="tab" role="tab" data-tab="channels">Channels</button>
+      <button class="tab" role="tab" data-tab="tools">Tools</button>
     </div>
 
-    <div class="card">
-      <h2>Channels (optional)</h2>
-      <p class="hint">Connect a chat platform now, or do it later from the OpenClaw UI.</p>
+    <!-- ========== TAB: Setup ========== -->
+    <div class="tab-panel active" id="panel-setup">
 
-      <label>Telegram bot token</label>
-      <input id="telegramToken" type="password" placeholder="123456:ABC..." autocomplete="off" />
-      <div class="model-hint">From <code>@BotFather</code> on Telegram.</div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">AI Provider</div>
+          <div class="card-desc">Select your provider and enter credentials to get started.</div>
+        </div>
 
-      <label>Discord bot token</label>
-      <input id="discordToken" type="password" placeholder="Bot token" autocomplete="off" />
-      <div class="model-hint">From the Discord Developer Portal. Enable MESSAGE CONTENT INTENT.</div>
+        <div class="field">
+          <label class="field-label" for="authChoice">Provider</label>
+          <select id="authChoice">
+            <option value="openrouter-api-key">OpenRouter</option>
+            <option value="openai-api-key">OpenAI</option>
+            <option value="apiKey">Anthropic</option>
+            <option value="gemini-api-key">Google Gemini</option>
+            <option value="ai-gateway-api-key">Vercel AI Gateway</option>
+            <option value="moonshot-api-key">Moonshot AI</option>
+            <option value="minimax-api">MiniMax</option>
+            <option value="claude-cli">Anthropic (Claude CLI)</option>
+            <option value="codex-cli">OpenAI (Codex CLI OAuth)</option>
+          </select>
+        </div>
 
-      <button class="toggle" id="toggleSlack">+ Slack</button>
-      <div class="advanced" id="slackSection">
-        <label>Slack bot token</label>
-        <input id="slackBotToken" type="password" placeholder="xoxb-..." autocomplete="off" />
-        <label>Slack app token</label>
-        <input id="slackAppToken" type="password" placeholder="xapp-..." autocomplete="off" />
+        <div class="field">
+          <label class="field-label" for="authSecret">API Key</label>
+          <input id="authSecret" type="password" placeholder="Paste your key here" autocomplete="off" />
+        </div>
+
+        <div class="field" id="modelField">
+          <label class="field-label" for="model" id="modelLabel">Model</label>
+          <input id="model" type="text" placeholder="anthropic/claude-sonnet-4" autocomplete="off" />
+          <div class="field-hint" id="modelHint">
+            OpenRouter format: <code>provider/model-name</code>
+          </div>
+        </div>
+
+        <input type="hidden" id="flow" value="quickstart" />
       </div>
-    </div>
 
-    <div class="card">
-      <div class="actions">
-        <button class="btn btn-primary" id="run">Run Setup</button>
-        <button class="btn btn-danger" id="reset">Reset</button>
+      <div class="actions" style="margin-bottom:1rem;">
+        <button class="btn btn-primary" id="run">Deploy Configuration</button>
+        <button class="btn btn-ghost" id="reset">Reset</button>
       </div>
+
       <pre id="log"></pre>
     </div>
 
-    <button class="toggle" id="toggleAdvanced">Advanced tools</button>
-    <div class="advanced" id="advancedSection">
-      <div class="card" style="margin-top: 0.75rem">
-        <h2>Debug console</h2>
-        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap">
-          <select id="consoleCmd" style="flex:2">
+    <!-- ========== TAB: Channels ========== -->
+    <div class="tab-panel" id="panel-channels">
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Chat Platforms</div>
+          <div class="card-desc">Connect messaging platforms to your OpenClaw instance. These are optional and can be configured later.</div>
+        </div>
+
+        <div class="channel-grid">
+
+          <!-- Telegram -->
+          <div class="channel-card" id="channelTelegram">
+            <button class="channel-header" onclick="this.parentElement.classList.toggle('open')">
+              <svg class="channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 000 12a12 12 0 0012 12 12 12 0 0012-12A12 12 0 0012 0h-.056zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 01.171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+              <span class="channel-name">Telegram</span>
+              <span class="channel-toggle">&#9662;</span>
+            </button>
+            <div class="channel-body">
+              <div class="field" style="margin-top:0.75rem;">
+                <label class="field-label" for="telegramToken">Bot token</label>
+                <input id="telegramToken" type="password" placeholder="123456:ABC..." autocomplete="off" />
+                <div class="field-hint">Get this from <code>@BotFather</code> on Telegram.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Discord -->
+          <div class="channel-card" id="channelDiscord">
+            <button class="channel-header" onclick="this.parentElement.classList.toggle('open')">
+              <svg class="channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.617-1.25.077.077 0 00-.079-.037A19.736 19.736 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 00-.041-.106 13.107 13.107 0 01-1.872-.892.077.077 0 01-.008-.128 10.2 10.2 0 00.372-.292.074.074 0 01.077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 01.078.01c.12.098.246.198.373.292a.077.077 0 01-.006.127 12.299 12.299 0 01-1.873.892.077.077 0 00-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.839 19.839 0 006.002-3.03.077.077 0 00.032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
+              <span class="channel-name">Discord</span>
+              <span class="channel-toggle">&#9662;</span>
+            </button>
+            <div class="channel-body">
+              <div class="field" style="margin-top:0.75rem;">
+                <label class="field-label" for="discordToken">Bot token</label>
+                <input id="discordToken" type="password" placeholder="Bot token" autocomplete="off" />
+                <div class="field-hint">From the Discord Developer Portal. Enable MESSAGE CONTENT INTENT.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Slack -->
+          <div class="channel-card" id="channelSlack">
+            <button class="channel-header" onclick="this.parentElement.classList.toggle('open')">
+              <svg class="channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M5.042 15.165a2.528 2.528 0 01-2.52 2.523A2.528 2.528 0 010 15.165a2.527 2.527 0 012.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 012.521-2.52 2.527 2.527 0 012.521 2.52v6.313A2.528 2.528 0 018.834 24a2.528 2.528 0 01-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 01-2.521-2.52A2.528 2.528 0 018.834 0a2.528 2.528 0 012.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 012.521 2.521 2.528 2.528 0 01-2.521 2.521H2.522A2.528 2.528 0 010 8.834a2.528 2.528 0 012.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 012.522-2.521A2.528 2.528 0 0124 8.834a2.528 2.528 0 01-2.522 2.521h-2.522V8.834zm-1.27 0a2.528 2.528 0 01-2.523 2.521 2.527 2.527 0 01-2.52-2.521V2.522A2.527 2.527 0 0115.163 0a2.528 2.528 0 012.523 2.522v6.312zM15.163 18.956a2.528 2.528 0 012.523 2.522A2.528 2.528 0 0115.163 24a2.527 2.527 0 01-2.52-2.522v-2.522h2.52zm0-1.27a2.527 2.527 0 01-2.52-2.523 2.526 2.526 0 012.52-2.52h6.315A2.528 2.528 0 0124 15.163a2.528 2.528 0 01-2.522 2.523h-6.315z"/></svg>
+              <span class="channel-name">Slack</span>
+              <span class="channel-toggle">&#9662;</span>
+            </button>
+            <div class="channel-body">
+              <div class="field" style="margin-top:0.75rem;">
+                <label class="field-label" for="slackBotToken">Bot token</label>
+                <input id="slackBotToken" type="password" placeholder="xoxb-..." autocomplete="off" />
+              </div>
+              <div class="field">
+                <label class="field-label" for="slackAppToken">App token</label>
+                <input id="slackAppToken" type="password" placeholder="xapp-..." autocomplete="off" />
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== TAB: Tools ========== -->
+    <div class="tab-panel" id="panel-tools">
+
+      <!-- Debug Console -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Console</div>
+          <div class="card-desc">Run diagnostic commands against your instance.</div>
+        </div>
+        <div class="console-bar">
+          <select id="consoleCmd">
             <option value="gateway.restart">gateway.restart</option>
             <option value="gateway.stop">gateway.stop</option>
             <option value="gateway.start">gateway.start</option>
@@ -650,46 +901,60 @@ app.get("/setup", (req, res) => {
             <option value="openclaw.config.get">openclaw config get (path)</option>
             <option value="openclaw.version">openclaw --version</option>
           </select>
-          <input id="consoleArg" placeholder="arg" style="flex:1" />
+          <input id="consoleArg" placeholder="arg" />
           <button class="btn btn-secondary" id="consoleRun">Run</button>
         </div>
         <pre id="consoleOut"></pre>
       </div>
 
+      <!-- Config Editor -->
       <div class="card">
-        <h2>Config editor</h2>
-        <div class="hint" id="configPath"></div>
-        <textarea id="configText" style="height:200px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.8rem"></textarea>
-        <div class="actions">
+        <div class="card-header">
+          <div class="card-title">Configuration</div>
+          <div class="card-desc" id="configPath">Edit the raw config file directly.</div>
+        </div>
+        <textarea id="configText" style="height:200px;font-family:var(--font-mono);font-size:0.75rem;resize:vertical;"></textarea>
+        <div class="actions" style="margin-top:0.75rem;">
           <button class="btn btn-secondary" id="configReload">Reload</button>
           <button class="btn btn-primary" id="configSave">Save & Restart</button>
         </div>
         <pre id="configOut"></pre>
       </div>
 
+      <!-- Backup -->
       <div class="card">
-        <h2>Backup</h2>
+        <div class="card-header">
+          <div class="card-title">Backup & Restore</div>
+          <div class="card-desc">Export or import your instance data.</div>
+        </div>
         <div class="actions">
           <a href="/setup/export" class="btn btn-secondary" target="_blank">Download backup</a>
         </div>
-        <hr class="divider" />
-        <label>Import backup (.tar.gz)</label>
-        <input id="importFile" type="file" accept=".tar.gz,application/gzip" />
+        <hr class="separator" />
+        <div class="field">
+          <label class="field-label" for="importFile">Import backup (.tar.gz)</label>
+          <input id="importFile" type="file" accept=".tar.gz,application/gzip" />
+        </div>
         <div class="actions">
-          <button class="btn btn-danger" id="importRun">Import</button>
+          <button class="btn btn-danger" id="importRun">Import & Overwrite</button>
         </div>
         <pre id="importOut"></pre>
       </div>
 
+      <!-- Pairing -->
       <div class="card">
-        <h2>Pairing</h2>
-        <p class="hint">Approve DM access when dmPolicy=pairing.</p>
+        <div class="card-header">
+          <div class="card-title">Device Pairing</div>
+          <div class="card-desc">Approve DM access when dmPolicy is set to pairing.</div>
+        </div>
         <div class="actions">
           <button class="btn btn-secondary" id="pairingApprove">Approve pairing code</button>
         </div>
       </div>
+
     </div>
-  </div>
+
+  </main>
 
   <script src="/setup/app.js"></script>
 </body>

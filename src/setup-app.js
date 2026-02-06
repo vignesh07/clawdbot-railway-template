@@ -2,43 +2,54 @@
 // No fancy syntax: keep it maximally compatible.
 
 (function () {
+  // ---- Tab navigation ----
+  var tabs = document.querySelectorAll('.tab');
+  var panels = document.querySelectorAll('.tab-panel');
+
+  function switchTab(name) {
+    tabs.forEach(function (t) {
+      t.classList.toggle('active', t.getAttribute('data-tab') === name);
+      t.setAttribute('aria-selected', t.getAttribute('data-tab') === name ? 'true' : 'false');
+    });
+    panels.forEach(function (p) {
+      p.classList.toggle('active', p.id === 'panel-' + name);
+    });
+  }
+
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      switchTab(t.getAttribute('data-tab'));
+    });
+  });
+
+  // ---- Element refs ----
   var statusEl = document.getElementById('status');
   var statusDot = document.getElementById('statusDot');
   var logEl = document.getElementById('log');
 
-  // Provider fields
   var authChoiceEl = document.getElementById('authChoice');
   var modelEl = document.getElementById('model');
-  var modelLabelEl = document.getElementById('modelLabel');
+  var modelFieldEl = document.getElementById('modelField');
   var modelHintEl = document.getElementById('modelHint');
 
-  // Debug console
   var consoleCmdEl = document.getElementById('consoleCmd');
   var consoleArgEl = document.getElementById('consoleArg');
   var consoleRunEl = document.getElementById('consoleRun');
   var consoleOutEl = document.getElementById('consoleOut');
 
-  // Config editor
   var configPathEl = document.getElementById('configPath');
   var configTextEl = document.getElementById('configText');
   var configReloadEl = document.getElementById('configReload');
   var configSaveEl = document.getElementById('configSave');
   var configOutEl = document.getElementById('configOut');
 
-  // Import
   var importFileEl = document.getElementById('importFile');
   var importRunEl = document.getElementById('importRun');
   var importOutEl = document.getElementById('importOut');
 
-  // Toggles
-  var toggleSlack = document.getElementById('toggleSlack');
-  var slackSection = document.getElementById('slackSection');
-  var toggleAdvanced = document.getElementById('toggleAdvanced');
-  var advancedSection = document.getElementById('advancedSection');
-
-  // Model field visibility based on provider
+  // ---- Model field visibility ----
   var providersWithModel = {
-    'openrouter-api-key': { placeholder: 'anthropic/claude-sonnet-4', hint: 'OpenRouter format: provider/model-name. Examples: anthropic/claude-sonnet-4, openai/gpt-4o, google/gemini-2.5-pro' },
+    'openrouter-api-key': { placeholder: 'anthropic/claude-sonnet-4', hint: 'OpenRouter: <code>provider/model-name</code>' },
     'openai-api-key': { placeholder: 'gpt-4o', hint: 'e.g. gpt-4o, gpt-4o-mini, o1-preview' },
     'gemini-api-key': { placeholder: 'gemini-2.5-pro', hint: 'e.g. gemini-2.5-pro, gemini-2.5-flash' },
     'ai-gateway-api-key': { placeholder: 'anthropic/claude-sonnet-4', hint: 'provider/model format via Vercel AI Gateway' },
@@ -49,36 +60,18 @@
     var choice = authChoiceEl.value;
     var cfg = providersWithModel[choice];
     if (cfg) {
-      modelEl.style.display = '';
-      modelLabelEl.style.display = '';
-      modelHintEl.style.display = '';
+      modelFieldEl.style.display = '';
       modelEl.placeholder = cfg.placeholder;
-      modelHintEl.textContent = cfg.hint;
+      modelHintEl.innerHTML = cfg.hint;
     } else {
-      modelEl.style.display = 'none';
-      modelLabelEl.style.display = 'none';
-      modelHintEl.style.display = 'none';
+      modelFieldEl.style.display = 'none';
     }
   }
 
   authChoiceEl.onchange = updateModelVisibility;
   updateModelVisibility();
 
-  // Toggle handlers
-  if (toggleSlack && slackSection) {
-    toggleSlack.onclick = function () {
-      var open = slackSection.classList.toggle('open');
-      toggleSlack.textContent = open ? '- Slack' : '+ Slack';
-    };
-  }
-
-  if (toggleAdvanced && advancedSection) {
-    toggleAdvanced.onclick = function () {
-      var open = advancedSection.classList.toggle('open');
-      toggleAdvanced.textContent = open ? 'Hide advanced tools' : 'Advanced tools';
-    };
-  }
-
+  // ---- Helpers ----
   function showLog(text) {
     logEl.textContent = text;
     logEl.classList.add('visible');
@@ -98,10 +91,9 @@
     opts = opts || {};
     opts.credentials = 'same-origin';
     return fetch(url, opts).then(function (res) {
-      // If session expired, redirect to login
       if (res.status === 401) {
         window.location.href = '/auth/login';
-        return new Promise(function () {}); // never resolves
+        return new Promise(function () {});
       }
       if (!res.ok) {
         return res.text().then(function (t) {
@@ -112,16 +104,16 @@
     });
   }
 
+  // ---- Status ----
   function refreshStatus() {
-    setStatus('Loading...', null);
+    setStatus('Checking...', null);
     return httpJson('/setup/api/status').then(function (j) {
       var ver = j.openclawVersion ? (' v' + j.openclawVersion) : '';
       if (j.configured) {
-        setStatus('Configured' + ver + ' - ready to use', true);
+        setStatus('Running' + ver, true);
       } else {
-        setStatus('Not configured' + ver + ' - fill in the form below', false);
+        setStatus('Not configured' + ver, false);
       }
-
       if (configReloadEl && configTextEl) {
         loadConfigRaw();
       }
@@ -130,8 +122,12 @@
     });
   }
 
-  // Run setup
+  // ---- Run setup ----
   document.getElementById('run').onclick = function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Deploying...';
+
     var payload = {
       flow: document.getElementById('flow').value,
       authChoice: authChoiceEl.value,
@@ -160,12 +156,15 @@
       return refreshStatus();
     }).catch(function (e) {
       appendLog('\nError: ' + String(e) + '\n');
+    }).finally(function () {
+      btn.disabled = false;
+      btn.textContent = 'Deploy Configuration';
     });
   };
 
-  // Reset
+  // ---- Reset ----
   document.getElementById('reset').onclick = function () {
-    if (!confirm('Reset setup? This deletes the config file so onboarding can run again.')) return;
+    if (!confirm('Reset configuration? This deletes the config file so setup can run again.')) return;
     showLog('Resetting...\n');
     fetch('/setup/api/reset', { method: 'POST', credentials: 'same-origin' })
       .then(function (res) { if (res.status === 401) { window.location.href = '/auth/login'; return new Promise(function () {}); } return res.text(); })
@@ -173,7 +172,7 @@
       .catch(function (e) { appendLog('Error: ' + String(e) + '\n'); });
   };
 
-  // Debug console
+  // ---- Debug console ----
   function runConsole() {
     if (!consoleCmdEl || !consoleRunEl) return;
     var cmd = consoleCmdEl.value;
@@ -196,7 +195,7 @@
     consoleRunEl.onclick = runConsole;
   }
 
-  // Config editor
+  // ---- Config editor ----
   function loadConfigRaw() {
     if (!configTextEl) return;
     if (configOutEl) configOutEl.textContent = '';
@@ -229,7 +228,7 @@
   if (configReloadEl) configReloadEl.onclick = loadConfigRaw;
   if (configSaveEl) configSaveEl.onclick = saveConfigRaw;
 
-  // Import
+  // ---- Import ----
   function runImport() {
     if (!importRunEl || !importFileEl) return;
     var f = importFileEl.files && importFileEl.files[0];
@@ -257,7 +256,7 @@
 
   if (importRunEl) importRunEl.onclick = runImport;
 
-  // Pairing
+  // ---- Pairing ----
   var pairingBtn = document.getElementById('pairingApprove');
   if (pairingBtn) {
     pairingBtn.onclick = function () {
@@ -282,5 +281,6 @@
     };
   }
 
+  // ---- Init ----
   refreshStatus();
 })();
