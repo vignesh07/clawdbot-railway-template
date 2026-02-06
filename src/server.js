@@ -495,11 +495,8 @@ function buildOnboardArgs(payload) {
     }
   }
 
-  // Pass model through if provided (critical for OpenRouter, optional for others).
-  const model = (payload.model || "").trim();
-  if (model) {
-    args.push("--model", model);
-  }
+  // Model is applied after onboarding via `config set` (see /setup/api/run handler).
+  // The `onboard` command does not accept --model in newer OpenClaw builds.
 
   return args;
 }
