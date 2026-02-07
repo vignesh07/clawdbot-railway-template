@@ -66,4 +66,7 @@ COPY src ./src
 ENV OPENCLAW_PUBLIC_PORT=8080
 ENV PORT=8080
 EXPOSE 8080
-CMD ["node", "src/server.js"]
+# When OPENCLAW_STATE_DIR (or CLAWDBOT_STATE_DIR) points outside ~/.openclaw,
+# create a symlink so OpenClaw components that use the default home path
+# still write to the volume-backed state directory.
+CMD ["sh", "-c", "STATE_DIR=\"${OPENCLAW_STATE_DIR:-$CLAWDBOT_STATE_DIR}\"; if [ -n \"$STATE_DIR\" ] && [ \"$HOME/.openclaw\" != \"$STATE_DIR\" ]; then mkdir -p \"$STATE_DIR\" && ln -sfn \"$STATE_DIR\" \"$HOME/.openclaw\"; fi; exec node src/server.js"]
