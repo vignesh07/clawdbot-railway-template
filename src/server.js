@@ -43,41 +43,39 @@ const GITHUB_ALLOWED_USERS = (process.env.GITHUB_ALLOWED_USERS || "")
   .filter(Boolean);
 
 // SETUP_PASSWORD configuration.
-// Auto-generate a secure password if not provided.
+// Returns the env var, a previously-saved password, or null (first run).
+const PASSWORD_PATH = path.join(STATE_DIR, "setup.password");
+
 function resolveSetupPassword() {
   const envPassword = process.env.SETUP_PASSWORD?.trim();
   if (envPassword) return envPassword;
 
-  const passwordPath = path.join(STATE_DIR, "setup.password");
   try {
-    const existing = fs.readFileSync(passwordPath, "utf8").trim();
+    const existing = fs.readFileSync(PASSWORD_PATH, "utf8").trim();
     if (existing) return existing;
   } catch {
-    // First run - generate new password
+    // First run - no password yet
   }
 
-  const generated = crypto.randomBytes(24).toString("base64").replace(/[/+=]/g, "");
-  try {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    fs.writeFileSync(passwordPath, generated, { encoding: "utf8", mode: 0o600 });
-  } catch {
-    // best-effort
-  }
-  
-  console.log("\n" + "=".repeat(80));
-  console.log("⚠️  SETUP_PASSWORD was not configured!");
-  console.log("Auto-generated password for /setup access:");
-  console.log("");
-  console.log(`    ${generated}`);
-  console.log("");
-  console.log("This password has been saved to:", passwordPath);
-  console.log("Set SETUP_PASSWORD environment variable to use a custom password.");
-  console.log("=".repeat(80) + "\n");
-  
-  return generated;
+  return null; // Signal that user must create a password via the UI
 }
 
-const SETUP_PASSWORD = resolveSetupPassword();
+let SETUP_PASSWORD = resolveSetupPassword();
+
+function isPasswordConfigured() {
+  return SETUP_PASSWORD !== null;
+}
+
+function savePassword(password) {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(PASSWORD_PATH, password, { encoding: "utf8", mode: 0o600 });
+  } catch (err) {
+    console.error("[setup] Failed to save password:", err);
+    throw err;
+  }
+  SETUP_PASSWORD = password;
+}
 
 // Session secret: reuse a persisted value for stability across restarts.
 function resolveSessionSecret() {
@@ -382,9 +380,19 @@ function requireSetupPassword(req, res, next) {
   if (
     req.path === "/password-prompt" ||
     req.path === "/verify-password" ||
+    req.path === "/create-password" ||
+    req.path === "/save-password" ||
     req.path === "/healthz"
   ) {
     return next();
+  }
+
+  // If no password has been configured yet, redirect to password creation
+  if (!isPasswordConfigured()) {
+    if (req.path.startsWith("/api/") || req.headers.accept?.includes("application/json")) {
+      return res.status(401).json({ error: "Setup password not yet configured. Visit /setup to create one." });
+    }
+    return res.redirect("/setup/create-password");
   }
 
   // Check if password has been verified in session
@@ -665,6 +673,205 @@ function getBaseUrl(req) {
 
 // ---------- SETUP_PASSWORD routes ----------
 
+// --- First-run: Create Password ---
+app.get("/setup/create-password", (req, res) => {
+  // If password already exists, go to normal login
+  if (isPasswordConfigured()) {
+    return res.redirect("/setup/password-prompt");
+  }
+
+  const error = req.query.error || "";
+  const errorBlock = error
+    ? `<div class="alert alert-error">${escapeHtml(error)}</div>`
+    : "";
+
+  res.type("html").send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Create Setup Password</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #09090b;
+      --surface: #131316;
+      --surface-2: #1c1c21;
+      --border: #232329;
+      --text: #f4f4f5;
+      --text-dim: #a1a1aa;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --error: #ef4444;
+      --success: #22c55e;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 1rem;
+    }
+    .container {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2.5rem 2rem;
+      max-width: 480px;
+      width: 100%;
+    }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      text-align: center;
+    }
+    .subtitle {
+      color: var(--text-dim);
+      text-align: center;
+      margin-bottom: 2rem;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+    .alert {
+      padding: 0.875rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      font-size: 0.9rem;
+    }
+    .alert-error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+    }
+    .info-box {
+      background: rgba(59, 130, 246, 0.08);
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      line-height: 1.5;
+    }
+    .field { margin-bottom: 1.25rem; }
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+    input[type="password"] {
+      width: 100%;
+      padding: 0.875rem;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 1rem;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+    input[type="password"]:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    .hint {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      margin-top: 0.35rem;
+    }
+    button {
+      width: 100%;
+      padding: 0.875rem;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      font-family: inherit;
+      margin-top: 0.5rem;
+    }
+    button:hover { background: var(--primary-hover); }
+    button:active { transform: scale(0.98); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Create Setup Password</h1>
+    <p class="subtitle">Welcome! Create a password to protect the setup panel.<br/>You will use this password each time you access /setup.</p>
+    ${errorBlock}
+    <div class="info-box">
+      This password is saved to the server. You can also set it via the <code>SETUP_PASSWORD</code> environment variable to skip this step.
+    </div>
+    <form method="POST" action="/setup/save-password">
+      <div class="field">
+        <label for="password">New Password</label>
+        <input
+          type="password"
+          id="password"
+          name="password"
+          autocomplete="new-password"
+          required
+          autofocus
+          minlength="8"
+        />
+        <p class="hint">Minimum 8 characters</p>
+      </div>
+      <div class="field">
+        <label for="confirm">Confirm Password</label>
+        <input
+          type="password"
+          id="confirm"
+          name="confirm"
+          autocomplete="new-password"
+          required
+          minlength="8"
+        />
+      </div>
+      <button type="submit">Create Password & Continue</button>
+    </form>
+  </div>
+</body>
+</html>`);
+});
+
+app.post("/setup/save-password", express.urlencoded({ extended: false }), (req, res) => {
+  // Prevent overwriting an existing password via this route
+  if (isPasswordConfigured()) {
+    return res.redirect("/setup/password-prompt");
+  }
+
+  const password = req.body.password || "";
+  const confirm = req.body.confirm || "";
+
+  if (password.length < 8) {
+    return res.redirect("/setup/create-password?error=" + encodeURIComponent("Password must be at least 8 characters"));
+  }
+  if (password !== confirm) {
+    return res.redirect("/setup/create-password?error=" + encodeURIComponent("Passwords do not match"));
+  }
+
+  try {
+    savePassword(password);
+  } catch {
+    return res.redirect("/setup/create-password?error=" + encodeURIComponent("Failed to save password. Check server logs."));
+  }
+
+  // Automatically mark session as verified so user doesn't have to re-enter
+  req.session.setupPasswordVerified = true;
+  req.session.save(() => {
+    res.redirect("/setup");
+  });
+});
+
+// --- Normal password login ---
 app.get("/setup/password-prompt", (req, res) => {
   const error = req.query.error || "";
   const errorBlock = error
