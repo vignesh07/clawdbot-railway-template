@@ -66,11 +66,15 @@ COPY src ./src
 ENV OPENCLAW_PUBLIC_PORT=8080
 ENV PORT=8080
 EXPOSE 8080
-# When STATE_DIR points outside ~/.openclaw, symlink so components that use
-# the default home path still write to the volume.
+# When STATE_DIR points outside the default home paths, symlink all legacy
+# names (~/.openclaw, ~/.clawdbot, ~/.moltbot) so every code path that
+# resolves state via homedir() lands on the volume.
 CMD ["sh", "-c", "\
   STATE_DIR=\"${OPENCLAW_STATE_DIR:-$CLAWDBOT_STATE_DIR}\"; \
-  if [ -n \"$STATE_DIR\" ] && [ \"$HOME/.openclaw\" != \"$STATE_DIR\" ]; then \
-    mkdir -p \"$STATE_DIR\" && ln -sfn \"$STATE_DIR\" \"$HOME/.openclaw\"; \
+  if [ -n \"$STATE_DIR\" ]; then \
+    mkdir -p \"$STATE_DIR\"; \
+    for name in .openclaw .clawdbot .moltbot; do \
+      [ \"$HOME/$name\" != \"$STATE_DIR\" ] && ln -sfn \"$STATE_DIR\" \"$HOME/$name\"; \
+    done; \
   fi; \
   exec node src/server.js"]

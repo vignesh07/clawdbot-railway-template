@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "mcp__railway-mcp-server__list-deployments",
-      "Bash(railway up:*)"
+      "Bash(railway up:*)",
+      "Bash(railway ssh --project=b59339fd-ce0f-43fd-9f8d-bec4d6bd4130 --environment=43185058-5248-4be9-bbfd-fe4e5489725d --service=9f836d0c-4f2f-4bb0-8c91-74dd1b642d7b -- \"echo ''=== All dotfiles in HOME ===''; ls -la /root/ 2>/dev/null; echo; echo ''=== ~/clawd? ===''; ls -la /root/clawd 2>/dev/null; echo; echo ''=== ~/.moltbot? ===''; ls -la /root/.moltbot 2>/dev/null; echo; echo ''=== ~/.clawdbot? ===''; ls -la /root/.clawdbot 2>/dev/null; echo; echo ''=== grep for hardcoded paths in openclaw ===''; grep -r ''\\\\.clawdbot\\\\|\\\\.moltbot\\\\|\\\\.openclaw\\\\|/clawd'' /openclaw/dist/entry.js 2>/dev/null | head -20\")"
     ]
   }
 }
