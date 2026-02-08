@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import nodemailer from "nodemailer";
 
 import express from "express";
 import session from "express-session";
@@ -45,6 +46,32 @@ const GITHUB_ALLOWED_USERS = (process.env.GITHUB_ALLOWED_USERS || "")
 // SETUP_PASSWORD configuration.
 // Returns the env var, a previously-saved password, or null (first run).
 const PASSWORD_PATH = path.join(STATE_DIR, "setup.password");
+const PASSWORD_RESET_TOKENS_PATH = path.join(STATE_DIR, "reset-tokens.json");
+
+// Load existing reset tokens from file
+function loadResetTokens() {
+  try {
+    const data = fs.readFileSync(PASSWORD_RESET_TOKENS_PATH, "utf8");
+    return JSON.parse(data) || {};
+  } catch {
+    return {};
+  }
+}
+
+// Save reset tokens to file
+function saveResetTokens(tokens) {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(PASSWORD_RESET_TOKENS_PATH, JSON.stringify(tokens, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+  } catch (err) {
+    console.error("[reset] Failed to save reset tokens:", err);
+  }
+}
+
+let resetTokens = loadResetTokens();
 
 function resolveSetupPassword() {
   const envPassword = process.env.SETUP_PASSWORD?.trim();
@@ -59,6 +86,38 @@ function resolveSetupPassword() {
 
   return null; // Signal that user must create a password via the UI
 }
+
+// Configure email transporter for password reset
+async function setupEmailTransporter() {
+  const smtpHost = process.env.SMTP_HOST?.trim();
+  const smtpPort = Number.parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpUser = process.env.SMTP_USER?.trim();
+  const smtpPass = process.env.SMTP_PASS?.trim();
+  const smtpFrom = process.env.SMTP_FROM?.trim() || smtpUser;
+
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    console.log("[email] SMTP not configured. Password reset emails will not be sent.");
+    return null;
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: { user: smtpUser, pass: smtpPass },
+  });
+
+  try {
+    await transporter.verify();
+    console.log("[email] SMTP connection verified");
+    return transporter;
+  } catch (err) {
+    console.error("[email] SMTP verification failed:", err);
+    return null;
+  }
+}
+
+let emailTransporter = null;
 
 let SETUP_PASSWORD = resolveSetupPassword();
 
@@ -382,6 +441,10 @@ function requireSetupPassword(req, res, next) {
     req.path === "/verify-password" ||
     req.path === "/create-password" ||
     req.path === "/save-password" ||
+    req.path === "/forgot-password" ||
+    req.path === "/request-reset" ||
+    req.path === "/reset-password" ||
+    req.path === "/confirm-reset" ||
     req.path === "/healthz"
   ) {
     return next();
@@ -448,6 +511,11 @@ app.use(express.json({ limit: "1mb" }));
 
 // Session middleware
 app.use(session(SESSION_CONFIG));
+
+// Initialize email transporter on startup
+setupEmailTransporter().then((transporter) => {
+  emailTransporter = transporter;
+});
 
 // ---------- Auth routes ----------
 
@@ -979,6 +1047,18 @@ app.get("/setup/password-prompt", (req, res) => {
     button:active {
       transform: scale(0.98);
     }
+    .link {
+      color: var(--primary);
+      text-decoration: none;
+      font-size: 0.875rem;
+    }
+    .link:hover {
+      text-decoration: underline;
+    }
+    .link-container {
+      text-align: center;
+      margin-top: 1rem;
+    }
   </style>
 </head>
 <body>
@@ -1001,6 +1081,9 @@ app.get("/setup/password-prompt", (req, res) => {
       />
       <button type="submit">Continue</button>
     </form>
+    <div class="link-container">
+      <a href="/setup/forgot-password" class="link">Forgot password?</a>
+    </div>
   </div>
 </body>
 </html>`);
@@ -1057,6 +1140,254 @@ app.post("/setup/verify-password", rateLimitPassword, express.urlencoded({ exten
   } catch (err) {
     console.error("[setup] Password verification error:", err);
     res.redirect("/setup/password-prompt?error=" + encodeURIComponent("Incorrect password"));
+  }
+});
+
+// --- Password reset endpoints ---
+app.get("/setup/forgot-password", (req, res) => {
+  const message = req.query.message || "";
+  const error = req.query.error || "";
+  const messageBlock = message
+    ? `<div class="alert alert-success">${escapeHtml(message)}</div>`
+    : "";
+  const errorBlock = error
+    ? `<div class="alert alert-error">${escapeHtml(error)}</div>`
+    : "";
+
+  res.type("html").send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Forgot Password</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #09090b;
+      --surface: #131316;
+      --border: #232329;
+      --text: #f4f4f5;
+      --primary: #3b82f6;
+      --error: #ef4444;
+      --success: #22c55e;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 1rem;
+    }
+    .container {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2.5rem 2rem;
+      max-width: 420px;
+      width: 100%;
+    }
+    h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.5rem; text-align: center; }
+    .subtitle { color: #a1a1aa; font-size: 0.95rem; text-align: center; margin-bottom: 1.5rem; line-height: 1.5; }
+    form { display: flex; flex-direction: column; gap: 1rem; }
+    label { font-size: 0.875rem; font-weight: 500; display: block; margin-bottom: 0.375rem; }
+    input { background: #1c1c21; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; color: var(--text); font-size: 1rem; }
+    input:focus { outline: none; border-color: var(--primary); }
+    button { background: var(--primary); border: none; border-radius: 8px; padding: 0.75rem; color: white; font-weight: 600; cursor: pointer; font-size: 1rem; }
+    button:hover { background: #2563eb; }
+    button:active { transform: scale(0.98); }
+    .alert { padding: 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.875rem; }
+    .alert-error { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; }
+    .alert-success { background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); color: #86efac; }
+    .link { color: var(--primary); text-decoration: none; }
+    .link:hover { text-decoration: underline; }
+    .back-link { text-align: center; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Forgot Password</h1>
+    <p class="subtitle">Enter your email address to receive a password reset link.</p>
+    ${messageBlock}
+    ${errorBlock}
+    <form method="POST" action="/setup/request-reset">
+      <label for="email">Email Address</label>
+      <input type="email" id="email" name="email" placeholder="your@email.com" required>
+      <button type="submit">Send Reset Link</button>
+    </form>
+    <div class="back-link">
+      <a href="/setup/password-prompt" class="link">Back to Login</a>
+    </div>
+  </div>
+</body>
+</html>`);
+});
+
+app.post("/setup/request-reset", express.urlencoded({ extended: false }), async (req, res) => {
+  const email = (req.body.email || "").trim().toLowerCase();
+
+  if (!email) {
+    return res.redirect("/setup/forgot-password?error=" + encodeURIComponent("Email is required"));
+  }
+
+  if (!emailTransporter) {
+    return res.redirect("/setup/forgot-password?error=" + encodeURIComponent("Email service not configured. Please contact your administrator."));
+  }
+
+  // Generate a reset token
+  const token = crypto.randomBytes(32).toString("hex");
+  const expiresAt = Date.now() + 3600000; // 1 hour
+
+  // Store the token
+  resetTokens[token] = { email, expiresAt };
+  saveResetTokens(resetTokens);
+
+  // Send reset email
+  const resetUrl = `${getBaseUrl(req)}/setup/reset-password?token=${encodeURIComponent(token)}`;
+
+  try {
+    await emailTransporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: email,
+      subject: "Password Reset Request - OpenClaw Setup",
+      html: `
+        <h2>Password Reset Request</h2>
+        <p>You requested a password reset for your OpenClaw setup.</p>
+        <p><a href="${escapeHtml(resetUrl)}" style="background: #3b82f6; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; display: inline-block;">Reset Password</a></p>
+        <p>This link expires in 1 hour.</p>
+        <p>If you didn't request this, you can safely ignore this email.</p>
+      `,
+      text: `Click here to reset your password: ${resetUrl}\n\nThis link expires in 1 hour.`,
+    });
+
+    res.redirect("/setup/forgot-password?message=" + encodeURIComponent("Reset link sent to your email. Check your inbox."));
+  } catch (err) {
+    console.error("[reset] Email send error:", err);
+    res.redirect("/setup/forgot-password?error=" + encodeURIComponent("Failed to send email. Please try again later."));
+  }
+});
+
+app.get("/setup/reset-password", (req, res) => {
+  const token = (req.query.token || "").trim();
+  const error = req.query.error || "";
+
+  if (!token) {
+    return res.redirect("/setup/forgot-password?error=" + encodeURIComponent("Invalid or missing reset token"));
+  }
+
+  const resetData = resetTokens[token];
+  if (!resetData || resetData.expiresAt < Date.now()) {
+    // Clean up expired token
+    if (resetData) delete resetTokens[token];
+    saveResetTokens(resetTokens);
+    return res.redirect("/setup/forgot-password?error=" + encodeURIComponent("Reset link has expired. Please request a new one."));
+  }
+
+  const errorBlock = error
+    ? `<div class="alert alert-error">${escapeHtml(error)}</div>`
+    : "";
+
+  res.type("html").send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Reset Password</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #09090b;
+      --surface: #131316;
+      --border: #232329;
+      --text: #f4f4f5;
+      --primary: #3b82f6;
+      --error: #ef4444;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 1rem;
+    }
+    .container {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2.5rem 2rem;
+      max-width: 420px;
+      width: 100%;
+    }
+    h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.5rem; text-align: center; }
+    .subtitle { color: #a1a1aa; font-size: 0.95rem; text-align: center; margin-bottom: 1.5rem; line-height: 1.5; }
+    form { display: flex; flex-direction: column; gap: 1rem; }
+    label { font-size: 0.875rem; font-weight: 500; display: block; margin-bottom: 0.375rem; }
+    input { background: #1c1c21; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; color: var(--text); font-size: 1rem; font-family: monospace; }
+    input:focus { outline: none; border-color: var(--primary); }
+    button { background: var(--primary); border: none; border-radius: 8px; padding: 0.75rem; color: white; font-weight: 600; cursor: pointer; font-size: 1rem; }
+    button:hover { background: #2563eb; }
+    button:active { transform: scale(0.98); }
+    .alert { padding: 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.875rem; }
+    .alert-error { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5; }
+    .link { color: var(--primary); text-decoration: none; }
+    .link:hover { text-decoration: underline; }
+    .back-link { text-align: center; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Reset Password</h1>
+    <p class="subtitle">Enter a new password for your OpenClaw setup.</p>
+    ${errorBlock}
+    <form method="POST" action="/setup/confirm-reset">
+      <input type="hidden" name="token" value="${escapeHtml(token)}">
+      <label for="password">New Password</label>
+      <input type="password" id="password" name="password" placeholder="At least 8 characters" required>
+      <label for="confirm">Confirm Password</label>
+      <input type="password" id="confirm" name="confirm" placeholder="Repeat password" required>
+      <button type="submit">Reset Password</button>
+    </form>
+    <div class="back-link">
+      <a href="/setup/password-prompt" class="link">Back to Login</a>
+    </div>
+  </div>
+</body>
+</html>`);
+});
+
+app.post("/setup/confirm-reset", express.urlencoded({ extended: false }), (req, res) => {
+  const token = (req.body.token || "").trim();
+  const password = req.body.password || "";
+  const confirm = req.body.confirm || "";
+
+  const resetData = resetTokens[token];
+  if (!resetData || resetData.expiresAt < Date.now()) {
+    return res.redirect("/setup/forgot-password?error=" + encodeURIComponent("Reset link has expired"));
+  }
+
+  if (password.length < 8) {
+    return res.redirect("/setup/reset-password?token=" + encodeURIComponent(token) + "&error=" + encodeURIComponent("Password must be at least 8 characters"));
+  }
+
+  if (password !== confirm) {
+    return res.redirect("/setup/reset-password?token=" + encodeURIComponent(token) + "&error=" + encodeURIComponent("Passwords do not match"));
+  }
+
+  try {
+    savePassword(password);
+    // Clean up the token after use
+    delete resetTokens[token];
+    saveResetTokens(resetTokens);
+
+    res.redirect("/setup/password-prompt?message=" + encodeURIComponent("Password reset successfully. Please log in with your new password."));
+  } catch (err) {
+    console.error("[reset] Error saving password:", err);
+    res.redirect("/setup/reset-password?token=" + encodeURIComponent(token) + "&error=" + encodeURIComponent("Failed to reset password. Please try again."));
   }
 });
 

@@ -15,6 +15,7 @@
     "express": "^5.1.0",
     "express-session": "^1.18.1",
     "http-proxy": "^1.18.1",
+    "nodemailer": "^6.9.7",
     "tar": "^7.5.4"
   }
 }
