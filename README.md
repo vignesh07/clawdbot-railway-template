@@ -13,6 +13,28 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - **Import backup** from `/setup` (advanced recovery)
 - **Docker-based deployment** optimized for Railway's platform
 
+## 2-minute quickstart (zero guesswork)
+
+If you want truly seamless onboarding, ignore everything else for now and do only this:
+
+1. Click **Deploy on Railway**.
+2. Add a **Volume** mounted at `/data`.
+3. Set these variables:
+   - `OPENCLAW_STATE_DIR=/data/.openclaw`
+   - `OPENCLAW_WORKSPACE_DIR=/data/workspace`
+   - `SETUP_PASSWORD=` (leave empty to auto-generate)
+4. Enable **Public Networking** and deploy.
+5. Open `/setup`, use the password from logs, click **Deploy Configuration**.
+
+Done. Your app is live at `/` and `/openclaw`.
+
+### The only things you actually need up front
+
+- One model provider key (OpenRouter/OpenAI/Anthropic/etc.)
+- Optional: Telegram/Discord/Slack tokens (can be added later)
+
+Everything else can wait.
+
 ## How it works (high level)
 
 - The container runs a wrapper web server.
