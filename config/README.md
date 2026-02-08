@@ -1,35 +1,59 @@
 # OpenClaw Configuration
 
-This folder contains the template configuration for OpenClaw.
+Template configuration for OpenClaw deployment.
 
-## Files
+## Quick Start
 
-- `openclaw.template.json` — Base config with environment variable placeholders
+1. Copy `openclaw.template.json` to `~/.openclaw/openclaw.json`
+2. Replace environment variable placeholders with actual values
+3. Run `openclaw gateway start`
 
-## Environment Variables Required
-
-Set these in Railway (or your deployment platform):
+## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `GATEWAY_TOKEN` | Gateway auth token (generate a random string) |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token from @BotFather |
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude models |
-| `OPENAI_API_KEY` | OpenAI API key for Codex models |
-| `GEMINI_API_KEY` | Google API key for Gemini (optional) |
-| `GH_PAT` | GitHub Personal Access Token for repo access |
+| `GATEWAY_TOKEN` | Gateway auth token (generate random string) |
+| `TELEGRAM_BOT_TOKEN` | From @BotFather |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `OPENAI_API_KEY` | OpenAI API key (for Codex) |
+| `GEMINI_API_KEY` | Google API key (optional) |
+| `GH_PAT` | GitHub Personal Access Token |
 
-## Model Aliases
+## Model Hierarchy
 
-| Alias | Model | Use Case |
-|-------|-------|----------|
-| `opus` | claude-opus-4-5 | CTO / Sr. Eng — complex tasks |
-| `sonnet` | claude-sonnet-4 | Jr. Eng / Intern — general coding |
-| `haiku` | claude-3.5-haiku | Quick lookups |
-| `codex` | gpt-5.2-codex | Adhoc builds, side projects |
-| `codex-mini` | codex-mini-latest | Quick prototypes |
+**Engineering Team:**
+- `opus` — CTO / Sr. Eng (complex architecture, critical code)
+- `sonnet` — Jr. Eng / Intern (features, PRs, tests)
+- `codex` — Side projects, adhoc builds
+- `codex-mini` — Quick prototypes
+- `haiku` — Quick lookups, cheap tasks
 
-## Sub-agents
+**Sub-agents default to Sonnet.**
 
-Default model: `sonnet` (Jr. Eng level)
-Max concurrent: 4
+## Plugins Installed
+
+- **camoufox-browser** — Anti-fingerprint browser for web automation
+
+Install with:
+```bash
+openclaw plugins install @askjo/camoufox-browser
+```
+
+## Token Optimization
+
+Config includes:
+- Context pruning (cache-ttl: 1h)
+- Compaction (safeguard mode)
+- Max concurrent: 4
+
+For more aggressive savings:
+- Switch default model to Haiku
+- Route heartbeats to local Ollama
+- Enable prompt caching
+
+## Security
+
+- Gateway binds to loopback only
+- DM policy: pairing (approval required)
+- Groups: require @mention
+- Tailscale: off by default (enable for remote access)

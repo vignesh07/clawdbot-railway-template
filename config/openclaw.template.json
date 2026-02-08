@@ -6,21 +6,11 @@
         "primary": "anthropic/claude-opus-4-5"
       },
       "models": {
-        "anthropic/claude-opus-4-5": {
-          "alias": "opus"
-        },
-        "anthropic/claude-sonnet-4-20250514": {
-          "alias": "sonnet"
-        },
-        "anthropic/claude-3-5-haiku-20241022": {
-          "alias": "haiku"
-        },
-        "openai/gpt-5.2-codex": {
-          "alias": "codex"
-        },
-        "openai/codex-mini-latest": {
-          "alias": "codex-mini"
-        }
+        "anthropic/claude-opus-4-5": { "alias": "opus" },
+        "anthropic/claude-sonnet-4-20250514": { "alias": "sonnet" },
+        "anthropic/claude-3-5-haiku-20241022": { "alias": "haiku" },
+        "openai/gpt-5.2-codex": { "alias": "codex" },
+        "openai/codex-mini-latest": { "alias": "codex-mini" }
       },
       "heartbeat": {
         "every": "30m",
@@ -32,6 +22,11 @@
       },
       "compaction": {
         "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "contextPruning": {
+        "mode": "cache-ttl",
+        "ttl": "1h"
       }
     }
   },
@@ -56,11 +51,18 @@
       }
     }
   },
+  "browser": {
+    "profiles": {
+      "camoufox": {
+        "cdpUrl": "http://127.0.0.1:9377"
+      }
+    },
+    "defaultProfile": "camoufox"
+  },
   "plugins": {
     "entries": {
-      "telegram": {
-        "enabled": true
-      }
+      "telegram": { "enabled": true },
+      "camoufox-browser": { "enabled": true }
     }
   },
   "channels": {
@@ -74,6 +76,8 @@
           "requireMention": true
         }
       },
+      "groupPolicy": "allowlist",
+      "streamMode": "partial",
       "heartbeat": {
         "showOk": false,
         "showAlerts": true
@@ -81,7 +85,12 @@
     }
   },
   "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
     "restart": true
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
   },
   "skills": {
     "entries": {}
