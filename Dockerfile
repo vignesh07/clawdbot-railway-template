@@ -74,10 +74,8 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"'
   && chmod +x /usr/local/bin/openclaw
 
 # Pre-install plugins (so they survive container rebuilds)
+# Note: Camoufox binaries fetched at first use, not build time
 RUN openclaw plugins install @askjo/camoufox-browser || true
-
-# Fetch Camoufox browser binaries and set permissions
-RUN npx camoufox fetch && chmod -R 755 /root/.cache/camoufox || true
 
 COPY src ./src
 
