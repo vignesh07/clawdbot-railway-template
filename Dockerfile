@@ -49,10 +49,15 @@ RUN apt-get update \
     git \
   && rm -rf /var/lib/apt/lists/*
 
-# Install skill-search (skill registry search tool)
-RUN curl -fsSL https://github.com/jo-inc/safe-skill-search/releases/download/v0.2.0/skill-search-x86_64-unknown-linux-gnu.tar.gz \
-  | tar -xz -C /usr/local/bin \
-  && chmod +x /usr/local/bin/skill-search
+# Build skill-search from source (needs Rust)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+  && . /root/.cargo/env \
+  && git clone --depth 1 https://github.com/jo-inc/safe-skill-search.git /tmp/skill-search \
+  && cd /tmp/skill-search \
+  && cargo build --release \
+  && mv target/release/skill-search /usr/local/bin/ \
+  && chmod +x /usr/local/bin/skill-search \
+  && rm -rf /tmp/skill-search /root/.cargo /root/.rustup
 
 WORKDIR /app
 
