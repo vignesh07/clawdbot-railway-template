@@ -45,19 +45,6 @@ ENV NODE_ENV=production
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
-    libgtk-3-0 \
-    libdbus-glib-1-2 \
-    libasound2 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libxtst6 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libxkbcommon0 \
-    libx11-xcb1 \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -72,10 +59,6 @@ COPY --from=openclaw-build /openclaw /openclaw
 # Provide an openclaw executable
 RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"' > /usr/local/bin/openclaw \
   && chmod +x /usr/local/bin/openclaw
-
-# Pre-install plugins (so they survive container rebuilds)
-# Note: Camoufox binaries fetched at first use, not build time
-RUN openclaw plugins install @askjo/camoufox-browser || true
 
 COPY src ./src
 
