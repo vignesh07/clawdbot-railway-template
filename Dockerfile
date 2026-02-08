@@ -34,11 +34,13 @@ RUN apt-get update \
 
 # Install Bun package manager (required for OpenClaw UI build)
 # Note: The install script accepts specific versions (e.g., bun-v1.0.0) or no argument for latest
+# For enhanced security, consider pinning to a specific version in production
 ARG BUN_VERSION=
-RUN if [ -z "$BUN_VERSION" ]; then \
-      curl -fsSL https://bun.sh/install | bash; \
+RUN set -e; \
+    if [ -z "$BUN_VERSION" ]; then \
+      curl -fsSL https://bun.sh/install | bash || { echo "Bun installation failed"; exit 1; }; \
     else \
-      curl -fsSL https://bun.sh/install | bash -s -- "$BUN_VERSION"; \
+      curl -fsSL https://bun.sh/install | bash -s -- "$BUN_VERSION" || { echo "Bun installation failed for version $BUN_VERSION"; exit 1; }; \
     fi
 ENV PATH="/root/.bun/bin:${PATH}"
 
@@ -107,8 +109,13 @@ RUN apt-get update \
 # Create non-root user for security
 # Railway typically runs as root, but we provide the option for non-root deployment
 # Note: node base image may already have GID 1000, so we check first
-RUN (getent group 1000 || groupadd -r appuser -g 1000) \
-  && useradd -r -u 1000 -g 1000 -m -d /home/appuser -s /bin/bash appuser 2>/dev/null || true
+RUN if ! id -u 1000 >/dev/null 2>&1; then \
+      echo "Creating appuser with UID 1000..."; \
+      (getent group 1000 || groupadd -r appuser -g 1000) \
+        && useradd -r -u 1000 -g 1000 -m -d /home/appuser -s /bin/bash appuser; \
+    else \
+      echo "User with UID 1000 already exists, skipping user creation"; \
+    fi
 
 WORKDIR /app
 
@@ -139,9 +146,12 @@ ENV OPENCLAW_PUBLIC_PORT=8080
 ENV PORT=8080
 EXPOSE 8080
 
+# Install health check script
+COPY scripts/healthcheck.cjs /usr/local/bin/healthcheck.cjs
+
 # Health check endpoint for Railway and monitoring
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:8080/setup/healthz', (r) => { if (r.statusCode !== 200) throw new Error('Health check failed'); }).on('error', (e) => { throw e; });"
+  CMD node /usr/local/bin/healthcheck.cjs
 
 # Start the wrapper server
 CMD ["node", "src/server.js"]

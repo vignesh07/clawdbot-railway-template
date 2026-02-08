@@ -25,7 +25,6 @@ Thumbs.db
 
 # Documentation (not needed in runtime)
 *.md
-!README.md
 
 # Test files
 test
