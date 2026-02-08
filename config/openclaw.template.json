@@ -1,0 +1,89 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/root/.openclaw/workspace",
+      "model": {
+        "primary": "anthropic/claude-opus-4-5"
+      },
+      "models": {
+        "anthropic/claude-opus-4-5": {
+          "alias": "opus"
+        },
+        "anthropic/claude-sonnet-4-20250514": {
+          "alias": "sonnet"
+        },
+        "anthropic/claude-3-5-haiku-20241022": {
+          "alias": "haiku"
+        },
+        "openai/gpt-5.2-codex": {
+          "alias": "codex"
+        },
+        "openai/codex-mini-latest": {
+          "alias": "codex-mini"
+        }
+      },
+      "heartbeat": {
+        "every": "30m",
+        "target": "last"
+      },
+      "subagents": {
+        "maxConcurrent": 4,
+        "model": "anthropic/claude-sonnet-4-20250514"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "${GATEWAY_TOKEN}"
+    },
+    "port": 18789,
+    "bind": "loopback",
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    }
+  },
+  "auth": {
+    "profiles": {
+      "anthropic:default": {
+        "provider": "anthropic",
+        "mode": "token"
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "${TELEGRAM_BOT_TOKEN}",
+      "dmPolicy": "pairing",
+      "groups": {
+        "*": {
+          "enabled": true,
+          "requireMention": true
+        }
+      },
+      "heartbeat": {
+        "showOk": false,
+        "showAlerts": true
+      }
+    }
+  },
+  "commands": {
+    "restart": true
+  },
+  "skills": {
+    "entries": {}
+  }
+}
