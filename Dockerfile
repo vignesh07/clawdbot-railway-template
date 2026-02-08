@@ -47,6 +47,16 @@ RUN apt-get update \
     ca-certificates \
     curl \
     git \
+    # GTK deps for Camoufox browser
+    libgtk-3-0 \
+    libdbus-glib-1-2 \
+    libasound2 \
+    libxcomposite1 \
+    libxrandr2 \
+    libxtst6 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libx11-xcb1 \
   && rm -rf /var/lib/apt/lists/*
 
 # Build skill-search from source (needs Rust)
