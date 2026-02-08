@@ -31,16 +31,11 @@ const WORKSPACE_DIR =
   process.env.CLAWDBOT_WORKSPACE_DIR?.trim() ||
   path.join(STATE_DIR, "workspace");
 
-// GitHub OAuth configuration.
-// Required env vars: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET
-// Optional: GITHUB_ALLOWED_USERS (comma-separated list of GitHub usernames)
-// If GITHUB_ALLOWED_USERS is not set, any GitHub user can log in.
-const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID?.trim() || "";
-const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET?.trim() || "";
-const GITHUB_ALLOWED_USERS = (process.env.GITHUB_ALLOWED_USERS || "")
-  .split(",")
-  .map((u) => u.trim().toLowerCase())
-  .filter(Boolean);
+// Username/Password authentication configuration.
+// AUTH_USERNAME: username for login (default: "admin")
+// AUTH_PASSWORD: password for login (falls back to SETUP_PASSWORD for backward compatibility)
+const AUTH_USERNAME = process.env.AUTH_USERNAME?.trim() || "admin";
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD?.trim() || process.env.SETUP_PASSWORD?.trim() || "";
 
 // SETUP_PASSWORD configuration.
 // Returns the env var, a previously-saved password, or null (first run).
@@ -397,25 +392,10 @@ const SESSION_CONFIG = {
   },
 };
 
-// ---------- GitHub OAuth helpers ----------
-
-async function githubFetch(url, opts = {}) {
-  const res = await fetch(url, {
-    ...opts,
-    headers: {
-      accept: "application/json",
-      ...(opts.headers || {}),
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GitHub API ${res.status}: ${text}`);
-  }
-  return res.json();
-}
+// ---------- Username/Password Auth helpers ----------
 
 function isAuthConfigured() {
-  return Boolean(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET);
+  return Boolean(AUTH_PASSWORD);
 }
 
 // ---------- SETUP_PASSWORD authentication ----------
@@ -459,18 +439,16 @@ function requireSetupPassword(req, res, next) {
 }
 
 function requireAuth(req, res, next) {
-  // Auth routes and healthcheck are always public
+  // Login route and healthcheck are always public
   if (
-    req.path === "/auth/github" ||
-    req.path === "/auth/github/callback" ||
     req.path === "/auth/login" ||
     req.path === "/setup/healthz"
   ) {
     return next();
   }
 
-  // If GitHub OAuth is not configured, fall through (allow access).
-  // This lets users still complete initial setup before configuring OAuth.
+  // If auth is not configured, fall through (allow access).
+  // This lets users complete initial setup without authentication.
   if (!isAuthConfigured()) {
     return next();
   }
@@ -494,9 +472,46 @@ const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1); // trust Railway's reverse proxy for secure cookies
 app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: false })); // Parse form data for login
 
 // Session middleware
 app.use(session(SESSION_CONFIG));
+
+// Rate limiting for login attempts (in-memory store)
+const loginAttempts = new Map(); // IP -> { count, resetAt }
+
+function rateLimitLogin(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const now = Date.now();
+  const window = 15 * 60 * 1000; // 15 minutes
+  const maxAttempts = 10;
+
+  const record = loginAttempts.get(ip);
+  
+  if (record && now < record.resetAt) {
+    if (record.count >= maxAttempts) {
+      const retryAfter = Math.ceil((record.resetAt - now) / 1000);
+      res.set("Retry-After", String(retryAfter));
+      return res.status(429).json({ 
+        error: "Too many login attempts. Please try again later.",
+        retryAfter 
+      });
+    }
+  } else if (!record || now >= record.resetAt) {
+    // Reset or initialize
+    loginAttempts.set(ip, { count: 0, resetAt: now + window });
+  }
+
+  next();
+}
+
+function incrementLoginAttempts(req) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const record = loginAttempts.get(ip);
+  if (record) {
+    record.count++;
+  }
+}
 
 // ---------- Auth routes ----------
 
@@ -506,13 +521,11 @@ function loginPageHTML(error) {
     : "";
   const notConfigured = !isAuthConfigured()
     ? `<div class="alert alert-warn">
-        <strong>GitHub OAuth not configured.</strong><br/>
-        Set <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> in your Railway variables.<br/>
-        Optionally set <code>GITHUB_ALLOWED_USERS</code> to restrict access.
+        <strong>Open Access Mode</strong><br/>
+        Authentication not configured. Anyone with access to this URL can manage your instance.<br/>
+        Set <code>AUTH_PASSWORD</code> in your environment variables to secure access.
       </div>`
     : "";
-  const btnDisabled = !isAuthConfigured() ? "disabled" : "";
-  const btnCls = !isAuthConfigured() ? "btn-github disabled" : "btn-github";
 
   return `<!doctype html>
 <html lang="en">
@@ -575,23 +588,47 @@ function loginPageHTML(error) {
       font-size: 0.75rem; color: #d4d4d8;
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
     }
-    .btn-github {
-      display: flex; align-items: center; justify-content: center; gap: 0.5rem;
-      width: 100%; padding: 0.6875rem 1rem; border-radius: 10px;
-      border: 1px solid #232329; background: #fafafa; color: #09090b;
-      font-size: 0.8125rem; font-weight: 600; cursor: pointer;
-      transition: all 0.15s cubic-bezier(0.4,0,0.2,1);
-      text-decoration: none; position: relative;
-      animation: fadeUp 0.5s cubic-bezier(0.4,0,0.2,1) 0.2s both;
+    .form-group {
+      margin-bottom: 1rem;
+      animation: fadeUp 0.45s cubic-bezier(0.4,0,0.2,1) 0.2s both;
     }
-    .btn-github:hover { background: #e4e4e7; box-shadow: 0 2px 12px rgba(250,250,250,0.08); }
-    .btn-github:active { transform: scale(0.98); }
-    .btn-github.disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
-    .btn-github svg { width: 16px; height: 16px; flex-shrink: 0; }
+    .form-group label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      margin-bottom: 0.375rem;
+      color: #d4d4d8;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 0.625rem 0.875rem;
+      border-radius: 8px;
+      border: 1px solid #232329;
+      background: #131316;
+      color: #fafafa;
+      font-size: 0.875rem;
+      transition: all 0.15s cubic-bezier(0.4,0,0.2,1);
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+    }
+    .btn-submit {
+      display: flex; align-items: center; justify-content: center;
+      width: 100%; padding: 0.6875rem 1rem; border-radius: 10px;
+      border: none; background: #3b82f6; color: #fafafa;
+      font-size: 0.875rem; font-weight: 600; cursor: pointer;
+      transition: all 0.15s cubic-bezier(0.4,0,0.2,1);
+      animation: fadeUp 0.5s cubic-bezier(0.4,0,0.2,1) 0.3s both;
+      margin-top: 1.5rem;
+    }
+    .btn-submit:hover { background: #2563eb; box-shadow: 0 2px 12px rgba(59,130,246,0.3); }
+    .btn-submit:active { transform: scale(0.98); }
     .footer-text {
       text-align: center; margin-top: 2rem; font-size: 0.6875rem; color: #3f3f46;
       display: flex; align-items: center; justify-content: center; gap: 0.375rem;
-      animation: fadeUp 0.5s cubic-bezier(0.4,0,0.2,1) 0.3s both;
+      animation: fadeUp 0.5s cubic-bezier(0.4,0,0.2,1) 0.4s both;
     }
     .footer-text svg { width: 12px; height: 12px; }
   </style>
@@ -605,13 +642,20 @@ function loginPageHTML(error) {
     <p class="subtitle">Sign in to manage your instance</p>
     ${errorBlock}
     ${notConfigured}
-    <a href="/auth/github" class="${btnCls}" ${btnDisabled}>
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-      Continue with GitHub
-    </a>
+    <form method="POST" action="/auth/login">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" required autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password" />
+      </div>
+      <button type="submit" class="btn-submit">Sign In</button>
+    </form>
     <p class="footer-text">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-      Secured by GitHub OAuth
+      Secured by username & password
     </p>
   </div>
 </body>
@@ -627,78 +671,52 @@ app.get("/auth/login", (req, res) => {
   res.type("html").send(loginPageHTML(error));
 });
 
-app.get("/auth/github", (req, res) => {
-  if (!isAuthConfigured()) {
-    return res.redirect("/auth/login?error=" + encodeURIComponent("GitHub OAuth not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."));
+app.post("/auth/login", rateLimitLogin, (req, res) => {
+  const { username, password } = req.body;
+
+  // Validate form data
+  if (!username || !password) {
+    incrementLoginAttempts(req);
+    return res.redirect("/auth/login?error=" + encodeURIComponent("Username and password are required"));
   }
 
-  const state = crypto.randomBytes(16).toString("hex");
-  req.session.oauthState = state;
-
-  const params = new URLSearchParams({
-    client_id: GITHUB_CLIENT_ID,
-    redirect_uri: `${getBaseUrl(req)}/auth/github/callback`,
-    scope: "read:user",
-    state,
-  });
-
-  res.redirect(`https://github.com/login/oauth/authorize?${params}`);
-});
-
-app.get("/auth/github/callback", async (req, res) => {
-  try {
-    const { code, state } = req.query;
-
-    if (!code || !state || state !== req.session.oauthState) {
-      return res.redirect("/auth/login?error=" + encodeURIComponent("Invalid OAuth state. Please try again."));
-    }
-    delete req.session.oauthState;
-
-    // Exchange code for access token
-    const tokenData = await githubFetch("https://github.com/login/oauth/access_token", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        client_id: GITHUB_CLIENT_ID,
-        client_secret: GITHUB_CLIENT_SECRET,
-        code,
-      }),
-    });
-
-    if (!tokenData.access_token) {
-      return res.redirect("/auth/login?error=" + encodeURIComponent("Failed to get access token from GitHub."));
-    }
-
-    // Get user info
-    const user = await githubFetch("https://api.github.com/user", {
-      headers: { authorization: `Bearer ${tokenData.access_token}` },
-    });
-
-    const username = (user.login || "").toLowerCase();
-
-    // Check allowlist
-    if (GITHUB_ALLOWED_USERS.length > 0 && !GITHUB_ALLOWED_USERS.includes(username)) {
-      return res.redirect(
-        "/auth/login?error=" +
-          encodeURIComponent(`Access denied. User "${user.login}" is not in the allowed users list.`),
-      );
-    }
-
-    // Save to session
+  // If auth is not configured, grant "Open Access" session
+  if (!isAuthConfigured()) {
     req.session.user = {
-      id: user.id,
-      login: user.login,
-      avatar: user.avatar_url,
-      name: user.name || user.login,
+      id: "open-access",
+      login: username,
+      name: "Open Access User",
     };
-
-    req.session.save(() => {
+    return req.session.save(() => {
       res.redirect("/setup");
     });
-  } catch (err) {
-    console.error("[auth] GitHub OAuth error:", err);
-    res.redirect("/auth/login?error=" + encodeURIComponent("Authentication failed. Please try again."));
   }
+
+  // Check credentials using timing-safe comparison
+  const usernameMatch = crypto.timingSafeEqual(
+    Buffer.from(username),
+    Buffer.from(AUTH_USERNAME)
+  );
+  const passwordMatch = crypto.timingSafeEqual(
+    Buffer.from(password),
+    Buffer.from(AUTH_PASSWORD)
+  );
+
+  if (usernameMatch && passwordMatch) {
+    // Successful login
+    req.session.user = {
+      id: crypto.randomBytes(8).toString("hex"),
+      login: username,
+      name: username,
+    };
+    return req.session.save(() => {
+      res.redirect("/setup");
+    });
+  }
+
+  // Failed login
+  incrementLoginAttempts(req);
+  return res.redirect("/auth/login?error=" + encodeURIComponent("Invalid username or password"));
 });
 
 app.get("/auth/logout", (req, res) => {
@@ -713,12 +731,6 @@ app.get("/auth/me", (req, res) => {
   }
   res.json({ user: req.session.user });
 });
-
-function getBaseUrl(req) {
-  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  return `${proto}://${host}`;
-}
 
 // ---------- SETUP_PASSWORD routes ----------
 
@@ -1379,10 +1391,10 @@ app.post("/setup/confirm-reset", express.urlencoded({ extended: false }), (req, 
 // Minimal health endpoint for Railway - must be public
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
-// Apply SETUP_PASSWORD auth to /setup routes (before GitHub OAuth)
+// Apply SETUP_PASSWORD auth to /setup routes (before username/password auth)
 app.use("/setup", requireSetupPassword);
 
-// Apply auth to all routes below
+// Apply username/password auth to all routes below
 app.use(requireAuth);
 
 app.get("/setup/app.js", (_req, res) => {
@@ -1394,7 +1406,9 @@ app.get("/setup/app.js", (_req, res) => {
 app.get("/setup", (req, res) => {
   const user = req.session?.user;
   const avatarHtml = user
-    ? `<img src="${escapeHtml(user.avatar)}" alt="" class="avatar" /><span class="user-name">${escapeHtml(user.name || user.login)}</span>`
+    ? user.avatar 
+      ? `<img src="${escapeHtml(user.avatar)}" alt="" class="avatar" /><span class="user-name">${escapeHtml(user.name || user.login)}</span>`
+      : `<div class="avatar-placeholder"></div><span class="user-name">${escapeHtml(user.name || user.login)}</span>`
     : "";
   const signOutHtml = user ? `<a href="/auth/logout" class="nav-link">Sign out</a>` : "";
 
@@ -1490,6 +1504,11 @@ app.get("/setup", (req, res) => {
     .topbar-sep { width: 1px; height: 16px; background: var(--border); margin: 0 0.25rem; }
     .topbar-page { font-size: 0.8125rem; color: var(--text-dim); font-weight: 400; }
     .avatar { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border); }
+    .avatar-placeholder { 
+      width: 22px; height: 22px; border-radius: 50%; 
+      background: var(--surface-2); border: 1px solid var(--border);
+      display: inline-block;
+    }
     .user-name { font-size: 0.75rem; color: var(--text-dim); }
     .topbar-right { display: flex; align-items: center; gap: 0.75rem; }
     .nav-link { font-size: 0.75rem; color: var(--text-dim); text-decoration: none; transition: color 0.15s; }
@@ -2610,17 +2629,14 @@ const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`[wrapper] gateway token: ${OPENCLAW_GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
   console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
   if (isAuthConfigured()) {
-    console.log(`[wrapper] auth: GitHub OAuth (client_id=${GITHUB_CLIENT_ID.slice(0, 8)}...)`);
-    if (GITHUB_ALLOWED_USERS.length > 0) {
-      console.log(`[wrapper] allowed users: ${GITHUB_ALLOWED_USERS.join(", ")}`);
-    } else {
-      console.log(`[wrapper] allowed users: (any GitHub user)`);
-    }
+    console.log(`[wrapper] auth: Username/Password (username=${AUTH_USERNAME})`);
+    console.log(`[wrapper] auth: Password is configured`);
   } else {
     console.log(`[wrapper] ================================================`);
-    console.log(`[wrapper] WARNING: GitHub OAuth not configured!`);
-    console.log(`[wrapper] Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET`);
-    console.log(`[wrapper] in your Railway variables to protect this instance.`);
+    console.log(`[wrapper] WARNING: Authentication not configured!`);
+    console.log(`[wrapper] Set AUTH_PASSWORD (and optionally AUTH_USERNAME)`);
+    console.log(`[wrapper] in your environment variables to protect this instance.`);
+    console.log(`[wrapper] Open Access mode: Anyone can access /setup`);
     console.log(`[wrapper] ================================================`);
   }
   // Don't start gateway unless configured; proxy will ensure it starts.
