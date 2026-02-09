@@ -119,7 +119,15 @@ Then:
 ### Using Docker directly
 
 ```bash
+# Basic build
 docker build -t openclaw-railway-template .
+
+# Build with metadata (recommended for production)
+docker build \
+  --build-arg BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+  --build-arg VCS_REF="$(git rev-parse --short HEAD)" \
+  --build-arg OPENCLAW_GIT_REF=main \
+  -t openclaw-railway-template .
 
 docker run --rm -p 8080:8080 \
   -e PORT=8080 \
@@ -130,6 +138,23 @@ docker run --rm -p 8080:8080 \
   openclaw-railway-template
 
 # open http://localhost:8080/setup (username: admin, password: test)
+```
+
+#### Build Arguments
+
+The Dockerfile supports the following build arguments for enhanced metadata and customization:
+
+- `OPENCLAW_GIT_REF` - Git branch/tag to build (default: `main`)
+- `BUILD_DATE` - Build timestamp for image metadata (optional)
+- `VCS_REF` - Git commit SHA for traceability (optional)
+- `BUN_VERSION` - Specific Bun version to install (default: latest, e.g., `bun-v1.0.0`)
+
+Example:
+```bash
+docker build \
+  --build-arg OPENCLAW_GIT_REF=v1.2.3 \
+  --build-arg BUN_VERSION=bun-v1.0.30 \
+  -t openclaw-railway-template .
 ```
 
 ### Using Docker Compose
@@ -159,6 +184,30 @@ This approach is useful for:
 - Validating environment variable configuration
 
 See `.env.example` for all available configuration options.
+
+### Docker Image Features
+
+The production Docker image includes:
+
+✅ **Security Best Practices**
+- Multi-stage build for minimal attack surface
+- Non-root user support (optional, commented for Railway compatibility)
+- Health checks for container monitoring
+- Secure file permissions
+
+✅ **Build Optimization**
+- `.dockerignore` for faster builds and smaller context
+- Layer caching optimization
+- Minimal runtime dependencies
+
+✅ **Metadata & Traceability**
+- OCI-compliant image labels
+- Build date and VCS revision tracking
+- OpenClaw version pinning via build args
+
+✅ **Monitoring**
+- Built-in health check endpoint (`/setup/healthz`)
+- 30-second interval checks with 40-second startup grace period
 
 ## Docker to Railway Migration
 
