@@ -9,38 +9,57 @@ import session from "express-session";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
 
+/** @type {Set<string>} */
+const warnedDeprecatedEnv = new Set();
+
+/**
+ * Prefer `primaryKey`, fall back to `deprecatedKey` with a one-time warning.
+ * @param {string} primaryKey
+ * @param {string} deprecatedKey
+ */
+function getEnvWithShim(primaryKey, deprecatedKey) {
+  const primary = process.env[primaryKey]?.trim();
+  if (primary) return primary;
+
+  const deprecated = process.env[deprecatedKey]?.trim();
+  if (!deprecated) return undefined;
+
+  if (!warnedDeprecatedEnv.has(deprecatedKey)) {
+    console.warn(
+      `[deprecation] ${deprecatedKey} is deprecated. Use ${primaryKey} instead.`,
+    );
+    warnedDeprecatedEnv.add(deprecatedKey);
+  }
+
+  return deprecated;
+}
+
 // Railway deployments sometimes inject PORT=3000 by default. We want the wrapper to
 // reliably listen on 8080 unless explicitly overridden.
 //
 // Prefer OPENCLAW_PUBLIC_PORT (set in the Dockerfile / template) over PORT.
-// Keep CLAWDBOT_PUBLIC_PORT as a backward-compat alias for older templates.
 const PORT = Number.parseInt(
-  process.env.OPENCLAW_PUBLIC_PORT ?? process.env.CLAWDBOT_PUBLIC_PORT ?? process.env.PORT ?? "8080",
+  getEnvWithShim("OPENCLAW_PUBLIC_PORT", "CLAWDBOT_PUBLIC_PORT") ??
+    process.env.PORT ??
+    "8080",
   10,
 );
 
 // State/workspace
-// OpenClaw defaults to ~/.openclaw. Keep CLAWDBOT_* as backward-compat aliases.
+// OpenClaw defaults to ~/.openclaw.
 const STATE_DIR =
-  process.env.OPENCLAW_STATE_DIR?.trim() ||
-  process.env.CLAWDBOT_STATE_DIR?.trim() ||
+  getEnvWithShim("OPENCLAW_STATE_DIR", "CLAWDBOT_STATE_DIR") ||
   path.join(os.homedir(), ".openclaw");
 
 const WORKSPACE_DIR =
-  process.env.OPENCLAW_WORKSPACE_DIR?.trim() ||
-  process.env.CLAWDBOT_WORKSPACE_DIR?.trim() ||
+  getEnvWithShim("OPENCLAW_WORKSPACE_DIR", "CLAWDBOT_WORKSPACE_DIR") ||
   path.join(STATE_DIR, "workspace");
 
-// GitHub OAuth configuration.
-// Required env vars: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET
-// Optional: GITHUB_ALLOWED_USERS (comma-separated list of GitHub usernames)
-// If GITHUB_ALLOWED_USERS is not set, any GitHub user can log in.
-const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID?.trim() || "";
-const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET?.trim() || "";
-const GITHUB_ALLOWED_USERS = (process.env.GITHUB_ALLOWED_USERS || "")
-  .split(",")
-  .map((u) => u.trim().toLowerCase())
-  .filter(Boolean);
+// Username/Password authentication configuration.
+// AUTH_USERNAME: username for login (default: "admin")
+// AUTH_PASSWORD: password for login (falls back to SETUP_PASSWORD for backward compatibility)
+const AUTH_USERNAME = process.env.AUTH_USERNAME?.trim() || "admin";
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD?.trim() || process.env.SETUP_PASSWORD?.trim() || "";
 
 // SETUP_PASSWORD configuration.
 // Returns the env var, a previously-saved password, or null (first run).
@@ -150,7 +169,10 @@ const SESSION_SECRET = resolveSessionSecret();
 // Gateway admin token (protects OpenClaw gateway + Control UI).
 // Must be stable across restarts. If not provided via env, persist it in the state dir.
 function resolveGatewayToken() {
-  const envTok = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+  const envTok = getEnvWithShim(
+    "OPENCLAW_GATEWAY_TOKEN",
+    "CLAWDBOT_GATEWAY_TOKEN",
+  );
   if (envTok) return envTok;
 
   const tokenPath = path.join(STATE_DIR, "gateway.token");
@@ -173,8 +195,6 @@ function resolveGatewayToken() {
 
 const OPENCLAW_GATEWAY_TOKEN = resolveGatewayToken();
 process.env.OPENCLAW_GATEWAY_TOKEN = OPENCLAW_GATEWAY_TOKEN;
-// Backward-compat: some older flows expect CLAWDBOT_GATEWAY_TOKEN.
-process.env.CLAWDBOT_GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN;
 
 // Where the gateway will listen internally (we proxy to it).
 const INTERNAL_GATEWAY_PORT = Number.parseInt(process.env.INTERNAL_GATEWAY_PORT ?? "18789", 10);
@@ -191,8 +211,7 @@ function clawArgs(args) {
 
 function configPath() {
   return (
-    process.env.OPENCLAW_CONFIG_PATH?.trim() ||
-    process.env.CLAWDBOT_CONFIG_PATH?.trim() ||
+    getEnvWithShim("OPENCLAW_CONFIG_PATH", "CLAWDBOT_CONFIG_PATH") ||
     path.join(STATE_DIR, "openclaw.json")
   );
 }
@@ -207,6 +226,9 @@ function isConfigured() {
 
 let gatewayProc = null;
 let gatewayStarting = null;
+let gatewayRestartAttempts = 0;
+let gatewayRestartTimer = null;
+const MAX_RESTART_ATTEMPTS = 3;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -308,21 +330,69 @@ async function startGateway() {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
       OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-      // Backward-compat aliases
-      CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR || STATE_DIR,
-      CLAWDBOT_WORKSPACE_DIR: process.env.CLAWDBOT_WORKSPACE_DIR || WORKSPACE_DIR,
     },
   });
 
   gatewayProc.on("error", (err) => {
-    console.error(`[gateway] spawn error: ${String(err)}`);
+    console.error(`[gateway] spawn error: ${err.message}`);
+    if (err.code === "ENOENT") {
+      console.error(`[gateway] Binary not found. Check OPENCLAW_NODE and OPENCLAW_ENTRY paths.`);
+    } else if (err.code === "EACCES") {
+      console.error(`[gateway] Permission denied. Check file permissions.`);
+    }
     gatewayProc = null;
+    scheduleGatewayRestart();
   });
 
   gatewayProc.on("exit", (code, signal) => {
     console.error(`[gateway] exited code=${code} signal=${signal}`);
     gatewayProc = null;
+    
+    // Don't auto-restart if we're shutting down
+    if (!isShuttingDown) {
+      scheduleGatewayRestart();
+    }
   });
+}
+
+function scheduleGatewayRestart() {
+  // Clear any existing restart timer
+  if (gatewayRestartTimer) {
+    clearTimeout(gatewayRestartTimer);
+    gatewayRestartTimer = null;
+  }
+
+  // Check if we've exceeded max restart attempts
+  if (gatewayRestartAttempts >= MAX_RESTART_ATTEMPTS) {
+    console.error(`[gateway] Max restart attempts (${MAX_RESTART_ATTEMPTS}) exceeded. Manual intervention required.`);
+    return;
+  }
+
+  // Calculate exponential backoff delay: 1s, 2s, 4s
+  const delay = Math.pow(2, gatewayRestartAttempts) * 1000;
+  gatewayRestartAttempts++;
+
+  console.log(`[gateway] Scheduling restart attempt ${gatewayRestartAttempts}/${MAX_RESTART_ATTEMPTS} in ${delay}ms`);
+
+  gatewayRestartTimer = setTimeout(async () => {
+    try {
+      console.log(`[gateway] Auto-restart attempt ${gatewayRestartAttempts}/${MAX_RESTART_ATTEMPTS}`);
+      await startGateway();
+      
+      // Wait to verify it started successfully
+      const ready = await waitForGatewayReady({ timeoutMs: 10_000 });
+      if (ready) {
+        console.log("[gateway] Successfully restarted");
+        gatewayRestartAttempts = 0; // Reset counter on success
+      } else {
+        console.error("[gateway] Restart failed - not ready");
+        scheduleGatewayRestart(); // Try again
+      }
+    } catch (err) {
+      console.error("[gateway] Auto-restart failed:", err);
+      scheduleGatewayRestart(); // Try again
+    }
+  }, delay);
 }
 
 async function ensureGatewayRunning() {
@@ -397,25 +467,94 @@ const SESSION_CONFIG = {
   },
 };
 
-// ---------- GitHub OAuth helpers ----------
+// ---------- Error Handling Helpers ----------
 
-async function githubFetch(url, opts = {}) {
-  const res = await fetch(url, {
-    ...opts,
-    headers: {
-      accept: "application/json",
-      ...(opts.headers || {}),
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GitHub API ${res.status}: ${text}`);
-  }
-  return res.json();
+function errorPageHTML(statusCode, title, message, details = null) {
+  const showDetails = details && process.env.NODE_ENV !== "production";
+  const detailsBlock = showDetails
+    ? `<details class="error-details">
+        <summary>Show Technical Details</summary>
+        <pre>${escapeHtml(details)}</pre>
+      </details>`
+    : "";
+
+  const retryButton = (statusCode === 502 || statusCode === 503)
+    ? `<button class="btn-retry" onclick="location.reload()">Retry</button>
+       <script>
+         setTimeout(() => location.reload(), 5000);
+       </script>`
+    : "";
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${statusCode} - ${escapeHtml(title)}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #09090b; color: #fafafa; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 1.5rem;
+    }
+    .error-container {
+      max-width: 480px; width: 100%; text-align: center;
+    }
+    .status-code {
+      font-size: 6rem; font-weight: 700; color: #ef4444;
+      line-height: 1; margin-bottom: 1rem;
+      text-shadow: 0 0 40px rgba(239, 68, 68, 0.3);
+    }
+    h1 {
+      font-size: 1.5rem; font-weight: 600; margin-bottom: 0.75rem;
+      color: #fafafa; letter-spacing: -0.02em;
+    }
+    p {
+      font-size: 0.9375rem; color: #a1a1aa; line-height: 1.6;
+      margin-bottom: 2rem;
+    }
+    .btn-retry {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 0.75rem 1.5rem; border-radius: 10px;
+      border: none; background: #3b82f6; color: #fafafa;
+      font-size: 0.875rem; font-weight: 600; cursor: pointer;
+      transition: all 0.15s; text-decoration: none;
+    }
+    .btn-retry:hover { background: #2563eb; }
+    .error-details {
+      margin-top: 2rem; text-align: left;
+      background: #131316; border: 1px solid #232329;
+      border-radius: 8px; padding: 1rem;
+    }
+    .error-details summary {
+      cursor: pointer; font-size: 0.8125rem;
+      color: #71717a; font-weight: 500;
+    }
+    .error-details pre {
+      margin-top: 0.75rem; font-size: 0.75rem;
+      color: #d4d4d8; overflow-x: auto;
+      font-family: ui-monospace, monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="error-container">
+    <div class="status-code">${statusCode}</div>
+    <h1>${escapeHtml(title)}</h1>
+    <p>${escapeHtml(message)}</p>
+    ${retryButton}
+    ${detailsBlock}
+  </div>
+</body>
+</html>`;
 }
 
+// ---------- Username/Password Auth helpers ----------
+
 function isAuthConfigured() {
-  return Boolean(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET);
+  return Boolean(AUTH_PASSWORD);
 }
 
 // ---------- SETUP_PASSWORD authentication ----------
@@ -459,18 +598,16 @@ function requireSetupPassword(req, res, next) {
 }
 
 function requireAuth(req, res, next) {
-  // Auth routes and healthcheck are always public
+  // Login route and healthcheck are always public
   if (
-    req.path === "/auth/github" ||
-    req.path === "/auth/github/callback" ||
     req.path === "/auth/login" ||
     req.path === "/setup/healthz"
   ) {
     return next();
   }
 
-  // If GitHub OAuth is not configured, fall through (allow access).
-  // This lets users still complete initial setup before configuring OAuth.
+  // If auth is not configured, fall through (allow access).
+  // This lets users complete initial setup without authentication.
   if (!isAuthConfigured()) {
     return next();
   }
@@ -494,9 +631,46 @@ const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1); // trust Railway's reverse proxy for secure cookies
 app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: false })); // Parse form data for login
 
 // Session middleware
 app.use(session(SESSION_CONFIG));
+
+// Rate limiting for login attempts (in-memory store)
+const loginAttempts = new Map(); // IP -> { count, resetAt }
+
+function rateLimitLogin(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const now = Date.now();
+  const window = 15 * 60 * 1000; // 15 minutes
+  const maxAttempts = 10;
+
+  const record = loginAttempts.get(ip);
+  
+  if (record && now < record.resetAt) {
+    if (record.count >= maxAttempts) {
+      const retryAfter = Math.ceil((record.resetAt - now) / 1000);
+      res.set("Retry-After", String(retryAfter));
+      return res.status(429).json({ 
+        error: "Too many login attempts. Please try again later.",
+        retryAfter 
+      });
+    }
+  } else if (!record || now >= record.resetAt) {
+    // Reset or initialize
+    loginAttempts.set(ip, { count: 0, resetAt: now + window });
+  }
+
+  next();
+}
+
+function incrementLoginAttempts(req) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const record = loginAttempts.get(ip);
+  if (record) {
+    record.count++;
+  }
+}
 
 // ---------- Auth routes ----------
 
@@ -506,13 +680,11 @@ function loginPageHTML(error) {
     : "";
   const notConfigured = !isAuthConfigured()
     ? `<div class="alert alert-warn">
-        <strong>GitHub OAuth not configured.</strong><br/>
-        Set <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> in your Railway variables.<br/>
-        Optionally set <code>GITHUB_ALLOWED_USERS</code> to restrict access.
+        <strong>Open Access Mode</strong><br/>
+        Authentication not configured. Anyone with access to this URL can manage your instance.<br/>
+        Set <code>AUTH_PASSWORD</code> in your environment variables to secure access.
       </div>`
     : "";
-  const btnDisabled = !isAuthConfigured() ? "disabled" : "";
-  const btnCls = !isAuthConfigured() ? "btn-github disabled" : "btn-github";
 
   return `<!doctype html>
 <html lang="en">
@@ -575,23 +747,47 @@ function loginPageHTML(error) {
       font-size: 0.75rem; color: #d4d4d8;
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
     }
-    .btn-github {
-      display: flex; align-items: center; justify-content: center; gap: 0.5rem;
-      width: 100%; padding: 0.6875rem 1rem; border-radius: 10px;
-      border: 1px solid #232329; background: #fafafa; color: #09090b;
-      font-size: 0.8125rem; font-weight: 600; cursor: pointer;
-      transition: all 0.15s cubic-bezier(0.4,0,0.2,1);
-      text-decoration: none; position: relative;
-      animation: fadeUp 0.5s cubic-bezier(0.4,0,0.2,1) 0.2s both;
+    .form-group {
+      margin-bottom: 1rem;
+      animation: fadeUp 0.45s cubic-bezier(0.4,0,0.2,1) 0.2s both;
     }
-    .btn-github:hover { background: #e4e4e7; box-shadow: 0 2px 12px rgba(250,250,250,0.08); }
-    .btn-github:active { transform: scale(0.98); }
-    .btn-github.disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
-    .btn-github svg { width: 16px; height: 16px; flex-shrink: 0; }
+    .form-group label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      margin-bottom: 0.375rem;
+      color: #d4d4d8;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 0.625rem 0.875rem;
+      border-radius: 8px;
+      border: 1px solid #232329;
+      background: #131316;
+      color: #fafafa;
+      font-size: 0.875rem;
+      transition: all 0.15s cubic-bezier(0.4,0,0.2,1);
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+    }
+    .btn-submit {
+      display: flex; align-items: center; justify-content: center;
+      width: 100%; padding: 0.6875rem 1rem; border-radius: 10px;
+      border: none; background: #3b82f6; color: #fafafa;
+      font-size: 0.875rem; font-weight: 600; cursor: pointer;
+      transition: all 0.15s cubic-bezier(0.4,0,0.2,1);
+      animation: fadeUp 0.5s cubic-bezier(0.4,0,0.2,1) 0.3s both;
+      margin-top: 1.5rem;
+    }
+    .btn-submit:hover { background: #2563eb; box-shadow: 0 2px 12px rgba(59,130,246,0.3); }
+    .btn-submit:active { transform: scale(0.98); }
     .footer-text {
       text-align: center; margin-top: 2rem; font-size: 0.6875rem; color: #3f3f46;
       display: flex; align-items: center; justify-content: center; gap: 0.375rem;
-      animation: fadeUp 0.5s cubic-bezier(0.4,0,0.2,1) 0.3s both;
+      animation: fadeUp 0.5s cubic-bezier(0.4,0,0.2,1) 0.4s both;
     }
     .footer-text svg { width: 12px; height: 12px; }
   </style>
@@ -605,13 +801,20 @@ function loginPageHTML(error) {
     <p class="subtitle">Sign in to manage your instance</p>
     ${errorBlock}
     ${notConfigured}
-    <a href="/auth/github" class="${btnCls}" ${btnDisabled}>
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-      Continue with GitHub
-    </a>
+    <form method="POST" action="/auth/login">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" required autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password" />
+      </div>
+      <button type="submit" class="btn-submit">Sign In</button>
+    </form>
     <p class="footer-text">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-      Secured by GitHub OAuth
+      Secured by username & password
     </p>
   </div>
 </body>
@@ -627,78 +830,65 @@ app.get("/auth/login", (req, res) => {
   res.type("html").send(loginPageHTML(error));
 });
 
-app.get("/auth/github", (req, res) => {
-  if (!isAuthConfigured()) {
-    return res.redirect("/auth/login?error=" + encodeURIComponent("GitHub OAuth not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."));
+app.post("/auth/login", rateLimitLogin, (req, res) => {
+  const { username, password } = req.body;
+
+  // Validate form data
+  if (!username || !password) {
+    incrementLoginAttempts(req);
+    return res.redirect("/auth/login?error=" + encodeURIComponent("Username and password are required"));
   }
 
-  const state = crypto.randomBytes(16).toString("hex");
-  req.session.oauthState = state;
-
-  const params = new URLSearchParams({
-    client_id: GITHUB_CLIENT_ID,
-    redirect_uri: `${getBaseUrl(req)}/auth/github/callback`,
-    scope: "read:user",
-    state,
-  });
-
-  res.redirect(`https://github.com/login/oauth/authorize?${params}`);
-});
-
-app.get("/auth/github/callback", async (req, res) => {
-  try {
-    const { code, state } = req.query;
-
-    if (!code || !state || state !== req.session.oauthState) {
-      return res.redirect("/auth/login?error=" + encodeURIComponent("Invalid OAuth state. Please try again."));
-    }
-    delete req.session.oauthState;
-
-    // Exchange code for access token
-    const tokenData = await githubFetch("https://github.com/login/oauth/access_token", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        client_id: GITHUB_CLIENT_ID,
-        client_secret: GITHUB_CLIENT_SECRET,
-        code,
-      }),
-    });
-
-    if (!tokenData.access_token) {
-      return res.redirect("/auth/login?error=" + encodeURIComponent("Failed to get access token from GitHub."));
-    }
-
-    // Get user info
-    const user = await githubFetch("https://api.github.com/user", {
-      headers: { authorization: `Bearer ${tokenData.access_token}` },
-    });
-
-    const username = (user.login || "").toLowerCase();
-
-    // Check allowlist
-    if (GITHUB_ALLOWED_USERS.length > 0 && !GITHUB_ALLOWED_USERS.includes(username)) {
-      return res.redirect(
-        "/auth/login?error=" +
-          encodeURIComponent(`Access denied. User "${user.login}" is not in the allowed users list.`),
-      );
-    }
-
-    // Save to session
+  // If auth is not configured, grant "Open Access" session
+  if (!isAuthConfigured()) {
     req.session.user = {
-      id: user.id,
-      login: user.login,
-      avatar: user.avatar_url,
-      name: user.name || user.login,
+      id: "open-access",
+      login: username,
+      name: "Open Access User",
     };
-
-    req.session.save(() => {
+    return req.session.save(() => {
       res.redirect("/setup");
     });
-  } catch (err) {
-    console.error("[auth] GitHub OAuth error:", err);
-    res.redirect("/auth/login?error=" + encodeURIComponent("Authentication failed. Please try again."));
   }
+
+  // Check credentials using constant-time comparison to prevent timing attacks
+  // Pad strings to the same length for timingSafeEqual
+  const maxLen = Math.max(username.length, AUTH_USERNAME.length, password.length, AUTH_PASSWORD.length);
+  const usernameBuf = Buffer.alloc(maxLen);
+  const authUsernameBuf = Buffer.alloc(maxLen);
+  const passwordBuf = Buffer.alloc(maxLen);
+  const authPasswordBuf = Buffer.alloc(maxLen);
+  
+  usernameBuf.write(username);
+  authUsernameBuf.write(AUTH_USERNAME);
+  passwordBuf.write(password);
+  authPasswordBuf.write(AUTH_PASSWORD);
+  
+  let usernameMatch, passwordMatch;
+  try {
+    usernameMatch = crypto.timingSafeEqual(usernameBuf, authUsernameBuf) && username.length === AUTH_USERNAME.length;
+    passwordMatch = crypto.timingSafeEqual(passwordBuf, authPasswordBuf) && password.length === AUTH_PASSWORD.length;
+  } catch (err) {
+    // If comparison fails, treat as mismatch
+    usernameMatch = false;
+    passwordMatch = false;
+  }
+
+  if (usernameMatch && passwordMatch) {
+    // Successful login
+    req.session.user = {
+      id: crypto.randomBytes(8).toString("hex"),
+      login: username,
+      name: username,
+    };
+    return req.session.save(() => {
+      res.redirect("/setup");
+    });
+  }
+
+  // Failed login
+  incrementLoginAttempts(req);
+  return res.redirect("/auth/login?error=" + encodeURIComponent("Invalid username or password"));
 });
 
 app.get("/auth/logout", (req, res) => {
@@ -713,12 +903,6 @@ app.get("/auth/me", (req, res) => {
   }
   res.json({ user: req.session.user });
 });
-
-function getBaseUrl(req) {
-  const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  return `${proto}://${host}`;
-}
 
 // ---------- SETUP_PASSWORD routes ----------
 
@@ -1379,10 +1563,10 @@ app.post("/setup/confirm-reset", express.urlencoded({ extended: false }), (req, 
 // Minimal health endpoint for Railway - must be public
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
-// Apply SETUP_PASSWORD auth to /setup routes (before GitHub OAuth)
+// Apply SETUP_PASSWORD auth to /setup routes (before username/password auth)
 app.use("/setup", requireSetupPassword);
 
-// Apply auth to all routes below
+// Apply username/password auth to all routes below
 app.use(requireAuth);
 
 app.get("/setup/app.js", (_req, res) => {
@@ -1394,7 +1578,9 @@ app.get("/setup/app.js", (_req, res) => {
 app.get("/setup", (req, res) => {
   const user = req.session?.user;
   const avatarHtml = user
-    ? `<img src="${escapeHtml(user.avatar)}" alt="" class="avatar" /><span class="user-name">${escapeHtml(user.name || user.login)}</span>`
+    ? user.avatar 
+      ? `<img src="${escapeHtml(user.avatar)}" alt="" class="avatar" /><span class="user-name">${escapeHtml(user.name || user.login)}</span>`
+      : `<div class="avatar-placeholder"></div><span class="user-name">${escapeHtml(user.name || user.login)}</span>`
     : "";
   const signOutHtml = user ? `<a href="/auth/logout" class="nav-link">Sign out</a>` : "";
 
@@ -1490,6 +1676,11 @@ app.get("/setup", (req, res) => {
     .topbar-sep { width: 1px; height: 16px; background: var(--border); margin: 0 0.25rem; }
     .topbar-page { font-size: 0.8125rem; color: var(--text-dim); font-weight: 400; }
     .avatar { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border); }
+    .avatar-placeholder { 
+      width: 22px; height: 22px; border-radius: 50%; 
+      background: var(--surface-2); border: 1px solid var(--border);
+      display: inline-block;
+    }
     .user-name { font-size: 0.75rem; color: var(--text-dim); }
     .topbar-right { display: flex; align-items: center; gap: 0.75rem; }
     .nav-link { font-size: 0.75rem; color: var(--text-dim); text-decoration: none; transition: color 0.15s; }
@@ -2033,12 +2224,21 @@ app.get("/setup", (req, res) => {
 });
 
 app.get("/setup/api/status", async (_req, res) => {
-  const version = await runCmd(OPENCLAW_NODE, clawArgs(["--version"]));
+  try {
+    const version = await runCmd(OPENCLAW_NODE, clawArgs(["--version"]));
 
-  res.json({
-    configured: isConfigured(),
-    openclawVersion: version.output.trim(),
-  });
+    res.json({
+      configured: isConfigured(),
+      openclawVersion: version.output.trim(),
+    });
+  } catch (err) {
+    console.error("[/setup/api/status] error:", err);
+    res.status(500).json({ 
+      ok: false, 
+      error: "Failed to get status",
+      configured: isConfigured() 
+    });
+  }
 });
 
 function buildOnboardArgs(payload) {
@@ -2109,9 +2309,6 @@ function runCmd(cmd, args, opts = {}) {
         ...process.env,
         OPENCLAW_STATE_DIR: STATE_DIR,
         OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-        // Backward-compat aliases
-        CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR || STATE_DIR,
-        CLAWDBOT_WORKSPACE_DIR: process.env.CLAWDBOT_WORKSPACE_DIR || WORKSPACE_DIR,
       },
     });
 
@@ -2463,7 +2660,7 @@ app.get("/setup/api/debug", async (_req, res) => {
       stateDir: STATE_DIR,
       workspaceDir: WORKSPACE_DIR,
       configPath: configPath(),
-      gatewayTokenFromEnv: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim()),
+      gatewayTokenFromEnv: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN?.trim()),
       gatewayTokenPersisted: fs.existsSync(path.join(STATE_DIR, "gateway.token")),
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
     },
@@ -2624,53 +2821,60 @@ app.post("/setup/api/reset", async (_req, res) => {
 });
 
 app.get("/setup/export", async (_req, res) => {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  res.setHeader("content-type", "application/gzip");
-  res.setHeader(
-    "content-disposition",
-    `attachment; filename="openclaw-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz"`,
-  );
+    res.setHeader("content-type", "application/gzip");
+    res.setHeader(
+      "content-disposition",
+      `attachment; filename="openclaw-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz"`,
+    );
 
-  // Prefer exporting from a common /data root so archives are easy to inspect and restore.
-  // This preserves dotfiles like /data/.openclaw/openclaw.json.
-  const stateAbs = path.resolve(STATE_DIR);
-  const workspaceAbs = path.resolve(WORKSPACE_DIR);
+    // Prefer exporting from a common /data root so archives are easy to inspect and restore.
+    // This preserves dotfiles like /data/.openclaw/openclaw.json.
+    const stateAbs = path.resolve(STATE_DIR);
+    const workspaceAbs = path.resolve(WORKSPACE_DIR);
 
-  const dataRoot = "/data";
-  const underData = (p) => p === dataRoot || p.startsWith(dataRoot + path.sep);
+    const dataRoot = "/data";
+    const underData = (p) => p === dataRoot || p.startsWith(dataRoot + path.sep);
 
-  let cwd = "/";
-  let paths = [stateAbs, workspaceAbs].map((p) => p.replace(/^\//, ""));
+    let cwd = "/";
+    let paths = [stateAbs, workspaceAbs].map((p) => p.replace(/^\//, ""));
 
-  if (underData(stateAbs) && underData(workspaceAbs)) {
-    cwd = dataRoot;
-    // We export relative to /data so the archive contains: .openclaw/... and workspace/...
-    paths = [
-      path.relative(dataRoot, stateAbs) || ".",
-      path.relative(dataRoot, workspaceAbs) || ".",
-    ];
+    if (underData(stateAbs) && underData(workspaceAbs)) {
+      cwd = dataRoot;
+      // We export relative to /data so the archive contains: .openclaw/... and workspace/...
+      paths = [
+        path.relative(dataRoot, stateAbs) || ".",
+        path.relative(dataRoot, workspaceAbs) || ".",
+      ];
+    }
+
+    const stream = tar.c(
+      {
+        gzip: true,
+        portable: true,
+        noMtime: true,
+        cwd,
+        onwarn: () => {},
+      },
+      paths,
+    );
+
+    stream.on("error", (err) => {
+      console.error("[export]", err);
+      if (!res.headersSent) res.status(500);
+      res.end(String(err));
+    });
+
+    stream.pipe(res);
+  } catch (err) {
+    console.error("[/setup/export] error:", err);
+    if (!res.headersSent) {
+      res.status(500).type("text/plain").send(`Export failed: ${err.message}`);
+    }
   }
-
-  const stream = tar.c(
-    {
-      gzip: true,
-      portable: true,
-      noMtime: true,
-      cwd,
-      onwarn: () => {},
-    },
-    paths,
-  );
-
-  stream.on("error", (err) => {
-    console.error("[export]", err);
-    if (!res.headersSent) res.status(500);
-    res.end(String(err));
-  });
-
-  stream.pipe(res);
 });
 
 function isUnderDir(p, root) {
@@ -2767,6 +2971,7 @@ const proxy = httpProxy.createProxyServer({
   target: GATEWAY_TARGET,
   ws: true,
   xfwd: true,
+  proxyTimeout: 30000, // 30 second timeout
 });
 
 // Inject the gateway token into every proxied request so the gateway
@@ -2777,8 +2982,44 @@ proxy.on("proxyReq", (proxyReq) => {
   }
 });
 
-proxy.on("error", (err, _req, _res) => {
-  console.error("[proxy]", err);
+proxy.on("error", (err, req, res) => {
+  const timestamp = new Date().toISOString();
+  console.error(`[${timestamp}] [proxy] Error proxying ${req.method} ${req.url} to ${GATEWAY_TARGET}:`, err.message);
+
+  // If response is already sent, can't do anything
+  if (res.headersSent) {
+    return res.end();
+  }
+
+  // Determine error type and status code
+  let statusCode = 502;
+  let title = "Bad Gateway";
+  let message = "The gateway is not responding. Please try again.";
+
+  if (err.code === "ECONNREFUSED") {
+    statusCode = 503;
+    title = "Service Unavailable";
+    message = "The gateway service is currently unavailable. It may be starting up.";
+  } else if (err.code === "ECONNRESET") {
+    statusCode = 502;
+    title = "Connection Reset";
+    message = "The connection to the gateway was reset. Please try again.";
+  } else if (err.code === "ETIMEDOUT") {
+    statusCode = 504;
+    title = "Gateway Timeout";
+    message = "The gateway took too long to respond. Please try again.";
+  }
+
+  // Return appropriate response
+  if (req.path.startsWith("/setup/api/") || req.headers.accept?.includes("application/json")) {
+    return res.status(statusCode).json({
+      ok: false,
+      error: message,
+      code: err.code,
+    });
+  }
+
+  res.status(statusCode).type("html").send(errorPageHTML(statusCode, title, message, err.code));
 });
 
 app.use(async (req, res) => {
@@ -2833,6 +3074,40 @@ h1{font-size:1rem;font-weight:600;margin-bottom:0.375rem;animation:fadeUp 0.4s e
   return proxy.web(req, res, { target: GATEWAY_TARGET });
 });
 
+// ---------- Global Error Handler ----------
+
+app.use((err, req, res, next) => {
+  const timestamp = new Date().toISOString();
+  console.error(`[${timestamp}] Error on ${req.method} ${req.url}:`, err);
+  console.error(err.stack);
+
+  // Determine if this is an API route
+  const isApiRoute = req.path.startsWith("/setup/api/");
+
+  // Determine status code
+  let statusCode = err.statusCode || err.status || 500;
+  if (statusCode < 400) statusCode = 500;
+
+  // For API routes, return JSON
+  if (isApiRoute || req.headers.accept?.includes("application/json")) {
+    return res.status(statusCode).json({
+      ok: false,
+      error: err.message || "Internal server error",
+      ...(process.env.NODE_ENV !== "production" && { stack: err.stack }),
+    });
+  }
+
+  // For browser routes, return styled HTML error page
+  const title = statusCode < 500 ? "Request Error" : "Server Error";
+  const message = statusCode < 500
+    ? err.message || "The request could not be completed."
+    : "An unexpected error occurred. Please try again later.";
+
+  res.status(statusCode).type("html").send(
+    errorPageHTML(statusCode, title, message, process.env.NODE_ENV !== "production" ? err.stack : null)
+  );
+});
+
 const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`[wrapper] listening on :${PORT}`);
   console.log(`[wrapper] state dir: ${STATE_DIR}`);
@@ -2840,17 +3115,14 @@ const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`[wrapper] gateway token: ${OPENCLAW_GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
   console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
   if (isAuthConfigured()) {
-    console.log(`[wrapper] auth: GitHub OAuth (client_id=${GITHUB_CLIENT_ID.slice(0, 8)}...)`);
-    if (GITHUB_ALLOWED_USERS.length > 0) {
-      console.log(`[wrapper] allowed users: ${GITHUB_ALLOWED_USERS.join(", ")}`);
-    } else {
-      console.log(`[wrapper] allowed users: (any GitHub user)`);
-    }
+    console.log(`[wrapper] auth: Username/Password (username=${AUTH_USERNAME})`);
+    console.log(`[wrapper] auth: Password is configured`);
   } else {
     console.log(`[wrapper] ================================================`);
-    console.log(`[wrapper] WARNING: GitHub OAuth not configured!`);
-    console.log(`[wrapper] Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET`);
-    console.log(`[wrapper] in your Railway variables to protect this instance.`);
+    console.log(`[wrapper] WARNING: Authentication not configured!`);
+    console.log(`[wrapper] Set AUTH_PASSWORD (and optionally AUTH_USERNAME)`);
+    console.log(`[wrapper] in your environment variables to protect this instance.`);
+    console.log(`[wrapper] Open Access mode: Anyone can access /setup`);
     console.log(`[wrapper] ================================================`);
   }
   // Don't start gateway unless configured; proxy will ensure it starts.
@@ -2891,12 +3163,95 @@ server.on("upgrade", async (req, socket, head) => {
   proxy.ws(req, socket, head, { target: GATEWAY_TARGET });
 });
 
-process.on("SIGTERM", () => {
-  // Best-effort shutdown
+// ---------- Process-Level Error Handling and Graceful Shutdown ----------
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`\n[wrapper] Received ${signal}, starting graceful shutdown...`);
+
+  // Set a timeout to force exit after 10 seconds
+  const forceExitTimer = setTimeout(() => {
+    console.error("[wrapper] Graceful shutdown timeout - forcing exit");
+    process.exit(1);
+  }, 10000);
+
   try {
-    if (gatewayProc) gatewayProc.kill("SIGTERM");
-  } catch {
-    // ignore
+    // Close HTTP server (stop accepting new connections)
+    await new Promise((resolve) => {
+      server.close((err) => {
+        if (err) console.error("[wrapper] Error closing server:", err);
+        else console.log("[wrapper] HTTP server closed");
+        resolve();
+      });
+    });
+
+    // Kill gateway process
+    if (gatewayProc) {
+      console.log("[wrapper] Terminating gateway process...");
+      gatewayProc.kill("SIGTERM");
+      
+      // Wait up to 3 seconds for graceful termination
+      await new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          if (gatewayProc && !gatewayProc.killed) {
+            console.log("[wrapper] Gateway didn't exit gracefully, sending SIGKILL");
+            gatewayProc.kill("SIGKILL");
+          }
+          resolve();
+        }, 3000);
+
+        if (gatewayProc) {
+          gatewayProc.once("exit", () => {
+            clearTimeout(timeout);
+            console.log("[wrapper] Gateway process terminated");
+            resolve();
+          });
+        } else {
+          clearTimeout(timeout);
+          resolve();
+        }
+      });
+    }
+
+    clearTimeout(forceExitTimer);
+    console.log("[wrapper] Graceful shutdown complete");
+    process.exit(0);
+  } catch (err) {
+    console.error("[wrapper] Error during shutdown:", err);
+    clearTimeout(forceExitTimer);
+    process.exit(1);
   }
-  process.exit(0);
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+
+process.on("uncaughtException", (err) => {
+  console.error("[wrapper] FATAL: Uncaught exception - application in undefined state");
+  console.error(err);
+  console.error(err.stack);
+  
+  // Attempt minimal cleanup but exit immediately regardless
+  // The application is in an undefined state and cannot continue safely
+  try {
+    if (gatewayProc && !gatewayProc.killed) {
+      gatewayProc.kill("SIGKILL"); // Force kill immediately
+    }
+  } catch (cleanupErr) {
+    console.error("[wrapper] Error during emergency cleanup:", cleanupErr);
+  }
+  
+  // Exit immediately - do not attempt graceful shutdown
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[wrapper] Unhandled rejection at:", promise);
+  console.error("[wrapper] Reason:", reason);
+  // Don't exit on unhandled rejection, just log it
+  // In production, you might want to exit gracefully here
 });

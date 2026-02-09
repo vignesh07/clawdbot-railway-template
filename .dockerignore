@@ -1,0 +1,50 @@
+# Git files
+.git
+.gitignore
+.github
+
+# Node modules (will be installed in container)
+node_modules
+npm-debug.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in runtime)
+*.md
+
+# Test files
+test
+tests
+*.test.js
+*.spec.js
+
+# CI/CD
+.github
+
+# Temporary files
+tmp
+temp
+*.tmp
+.tmpdata
+
+# Build artifacts
+dist
+build
+coverage
+
+# Lock files (pnpm-lock.yaml is for openclaw, keep package-lock.json)
+pnpm-lock.yaml
