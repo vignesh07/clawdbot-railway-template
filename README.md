@@ -79,6 +79,19 @@ Then:
 - Complete setup
 - Visit `https://<your-app>.up.railway.app/` and `/openclaw`
 
+
+## Make onboarding easier (user-centric)
+
+If your goal is highest first-run success, use this sequence:
+
+1. Deploy with a mounted `/data` volume.
+2. Confirm `OPENCLAW_STATE_DIR` and `OPENCLAW_WORKSPACE_DIR` point to `/data`.
+3. Open `/setup` and finish provider key setup first.
+4. Verify routes in order: `/setup` → `/` → `/openclaw`.
+5. If anything fails, follow the release checklist and troubleshooting docs before retrying.
+
+For a prioritized roadmap to make onboarding more intuitive and robust, see [ONBOARDING_IMPROVEMENTS.md](./ONBOARDING_IMPROVEMENTS.md).
+
 ## Getting chat tokens (so you don’t have to scramble)
 
 ### Telegram bot token

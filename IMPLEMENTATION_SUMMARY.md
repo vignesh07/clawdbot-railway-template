@@ -43,6 +43,7 @@ Compared with the previous summary draft, this revision:
 | Railway operations guidance | `RAILWAY_DEPLOYMENT.md` | Consolidate deployment workflow, troubleshooting, and operations notes. |
 | Docker migration workflow | `DOCKER_TO_RAILWAY.md` | Define migration path from Docker/Compose to Railway. |
 | Local reproducibility | `docker-compose.yml`, `.env.example`, `scripts/smoke.js` | Enable pre-cutover checks and safer rollout preparation. |
+| Onboarding optimization roadmap | `ONBOARDING_IMPROVEMENTS.md` | Prioritize user-centric onboarding improvements by impact and effort. |
 
 ## Audience-Focused Outcomes
 
@@ -82,11 +83,12 @@ The following checks support delivery quality:
 5. Track rollout metrics (deployment success, setup completion, and setup duration).
 
 
-## Implemented Follow-Up Artifact
+## Implemented Follow-Up Artifacts
 
-A new operational checklist has been added to support repeatable releases:
+Two implementation-focused follow-ups are now included:
 
 - `RELEASE_CHECKLIST.md`: pre-release gates, validation commands, `/setup` verification, rollback triggers, and sign-off ownership.
+- `ONBOARDING_IMPROVEMENTS.md`: prioritized roadmap for making onboarding more robust, user-centric, and intuitive.
 
 ## Final Recommendation
 
