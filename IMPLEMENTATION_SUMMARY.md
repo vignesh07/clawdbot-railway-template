@@ -81,6 +81,13 @@ The following checks support delivery quality:
 4. Require local smoke validation prior to production cutover.
 5. Track rollout metrics (deployment success, setup completion, and setup duration).
 
+
+## Implemented Follow-Up Artifact
+
+A new operational checklist has been added to support repeatable releases:
+
+- `RELEASE_CHECKLIST.md`: pre-release gates, validation commands, `/setup` verification, rollback triggers, and sign-off ownership.
+
 ## Final Recommendation
 
 Based on the current repository state and the updated documentation set, the best immediate path is to **publish this as the canonical Railway template version** and enforce a lightweight release checklist that includes local smoke validation and `/setup` completion verification.
