@@ -132,6 +132,17 @@
   var importRunEl = document.getElementById('importRun');
   var importOutEl = document.getElementById('importOut');
 
+  var preflightBoxEl = document.getElementById('preflightBox');
+  var preflightListEl = document.getElementById('preflightList');
+  var preflightRunEl = document.getElementById('preflightRun');
+
+  var stageEls = {
+    validate: document.getElementById('stage-validate'),
+    configure: document.getElementById('stage-configure'),
+    deploy: document.getElementById('stage-deploy'),
+    verify: document.getElementById('stage-verify')
+  };
+
   // ======== Model field visibility ========
   var providersWithModel = {
     'openrouter-api-key': { placeholder: 'anthropic/claude-sonnet-4', hint: 'OpenRouter: <code>provider/model-name</code>' },
@@ -182,7 +193,34 @@
     btn.disabled = loading;
   }
 
-  function httpJson(url, opts) {
+  function normalizeApiError(status, body, fallbackMessage) {
+    var err = (body && body.error) || null;
+    if (err && typeof err === 'object') {
+      return {
+        status: status,
+        code: err.code || 'UNKNOWN',
+        message: err.message || fallbackMessage || 'Request failed',
+        action: err.action || '',
+        details: err.details || null
+      };
+    }
+    return {
+      status: status,
+      code: 'HTTP_' + status,
+      message: fallbackMessage || 'HTTP ' + status,
+      action: '',
+      details: body || null
+    };
+  }
+
+  function formatApiError(err) {
+    if (!err) return 'Unknown error';
+    var msg = err.message || String(err);
+    if (err.action) msg += ' Next: ' + err.action;
+    return msg;
+  }
+
+  function requestJson(url, opts) {
     opts = opts || {};
     opts.credentials = 'same-origin';
     return fetch(url, opts).then(function (res) {
@@ -190,19 +228,101 @@
         window.location.href = '/auth/login';
         return new Promise(function () {});
       }
-      if (!res.ok) {
-        return res.text().then(function (t) {
-          throw new Error('HTTP ' + res.status + ': ' + (t || res.statusText));
-        });
+      return res.text().then(function (text) {
+        var parsed = null;
+        try { parsed = text ? JSON.parse(text) : null; } catch (_e) {}
+        if (!res.ok) throw normalizeApiError(res.status, parsed || text, 'Request failed');
+        return parsed || {};
+      });
+    });
+  }
+
+  function requestText(url, opts) {
+    opts = opts || {};
+    opts.credentials = 'same-origin';
+    return fetch(url, opts).then(function (res) {
+      if (res.status === 401) {
+        window.location.href = '/auth/login';
+        return new Promise(function () {});
       }
-      return res.json();
+      return res.text().then(function (text) {
+        if (!res.ok) {
+          var parsed = null;
+          try { parsed = text ? JSON.parse(text) : null; } catch (_e) {}
+          throw normalizeApiError(res.status, parsed || text, text || 'Request failed');
+        }
+        return text;
+      });
+    });
+  }
+
+
+  function setStage(stage, state) {
+    var order = ['validate', 'configure', 'deploy', 'verify'];
+    order.forEach(function (name) {
+      var el = stageEls[name];
+      if (!el) return;
+      el.classList.remove('current', 'done', 'error');
+      if (state === 'error' && name === stage) {
+        el.classList.add('error');
+        return;
+      }
+      if (order.indexOf(name) < order.indexOf(stage)) el.classList.add('done');
+      else if (name === stage) el.classList.add('current');
+    });
+  }
+
+  function renderPreflight(j) {
+    if (!preflightBoxEl || !preflightListEl) return;
+    preflightListEl.innerHTML = '';
+    var items = [];
+    (j.errors || []).forEach(function (e) { items.push({ cls: 'err', text: e.message + ' Next: ' + (e.action || '') }); });
+    (j.warnings || []).forEach(function (w) { items.push({ cls: 'warn', text: w.message + ' Next: ' + (w.action || '') }); });
+    if (!items.length) items.push({ cls: '', text: 'All checks passed. You can deploy configuration.' });
+    items.forEach(function (it) {
+      var li = document.createElement('li');
+      li.className = it.cls;
+      li.textContent = it.text;
+      preflightListEl.appendChild(li);
+    });
+    preflightBoxEl.classList.add('visible');
+  }
+
+  function buildPayload() {
+    return {
+      flow: document.getElementById('flow').value,
+      authChoice: authChoiceEl.value,
+      authSecret: document.getElementById('authSecret').value,
+      model: modelEl.value,
+      telegramToken: document.getElementById('telegramToken').value,
+      discordToken: document.getElementById('discordToken').value,
+      slackBotToken: document.getElementById('slackBotToken').value,
+      slackAppToken: document.getElementById('slackAppToken').value
+    };
+  }
+
+  function runPreflight(payload, quiet) {
+    return requestJson('/setup/api/preflight', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload || buildPayload())
+    }).then(function (j) {
+      renderPreflight(j);
+      if (!quiet) {
+        if (j.ok) toast('Preflight passed', 'success');
+        else toast('Preflight found blocking issues', 'error');
+      }
+      return j;
+    }).catch(function (e) {
+      if (!quiet) toast('Preflight failed: ' + String(e), 'error');
+      throw e;
     });
   }
 
   // ======== Status ========
   function refreshStatus() {
     setStatus('Checking...', 'loading');
-    return httpJson('/setup/api/status').then(function (j) {
+    return requestJson('/setup/api/status').then(function (j) {
       var ver = j.openclawVersion ? j.openclawVersion : '';
       if (statusVersion) statusVersion.textContent = ver ? 'v' + ver : '';
       if (j.configured) {
@@ -219,52 +339,65 @@
 
   // ======== Run setup ========
   var runBtn = document.getElementById('run');
+  if (preflightRunEl) {
+    preflightRunEl.addEventListener('click', function () {
+      setStage('validate');
+      setLoading(preflightRunEl, true);
+      runPreflight(buildPayload(), false).finally(function () {
+        setLoading(preflightRunEl, false);
+      });
+    });
+  }
+
   runBtn.addEventListener('click', function () {
-    var secret = document.getElementById('authSecret').value.trim();
-    if (!secret && authChoiceEl.value !== 'claude-cli' && authChoiceEl.value !== 'codex-cli') {
-      toast('Please enter an API key', 'error');
-      document.getElementById('authSecret').focus();
-      return;
-    }
-
+    var payload = buildPayload();
     setLoading(runBtn, true);
+    if (preflightRunEl) setLoading(preflightRunEl, true);
 
-    var payload = {
-      flow: document.getElementById('flow').value,
-      authChoice: authChoiceEl.value,
-      authSecret: document.getElementById('authSecret').value,
-      model: modelEl.value,
-      telegramToken: document.getElementById('telegramToken').value,
-      discordToken: document.getElementById('discordToken').value,
-      slackBotToken: document.getElementById('slackBotToken').value,
-      slackAppToken: document.getElementById('slackAppToken').value
-    };
+    setStage('validate');
+    showLog('[validate] Running preflight checks...\n');
 
-    showLog('Deploying configuration...\n');
-
-    fetch('/setup/api/run', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload)
-    }).then(function (res) {
-      if (res.status === 401) { window.location.href = '/auth/login'; return new Promise(function () {}); }
-      return res.text();
-    }).then(function (text) {
-      var j;
-      try { j = JSON.parse(text); } catch (_e) { j = { ok: false, output: text }; }
-      appendLog(j.output || JSON.stringify(j, null, 2));
-      if (j.ok) {
-        toast('Configuration deployed successfully', 'success');
-      } else {
-        toast('Setup completed with warnings -- check the log', 'info');
+    runPreflight(payload, true).then(function (pf) {
+      if (!pf.ok) {
+        setStage('validate', 'error');
+        throw new Error('Preflight failed. Resolve highlighted issues and try again.');
       }
-      return refreshStatus();
+
+      setStage('configure');
+      showLog('[configure] Inputs validated. Preparing setup payload...\n');
+      setStage('deploy');
+      appendLog('[deploy] Running OpenClaw onboarding...\n');
+
+      return requestJson('/setup/api/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    }).then(function (j) {
+      if (!j) return;
+      appendLog(j.output || JSON.stringify(j, null, 2));
+
+      setStage('verify');
+      return refreshStatus().then(function () {
+        toast('Configuration deployed successfully', 'success');
+        appendLog('\n[verify] Setup complete. Next: open / and /openclaw to confirm routing.\n');
+      });
     }).catch(function (e) {
-      appendLog('\nError: ' + String(e) + '\n');
-      toast('Deployment failed: ' + String(e), 'error');
+      var msg = formatApiError(e);
+      appendLog('\nError: ' + msg + '\n');
+      if (e && e.details && e.details.outputPreview) {
+        appendLog('\n--- Output preview ---\n' + e.details.outputPreview + '\n');
+      }
+      if ((e && e.code === 'PRECONDITION_FAILED') || String(msg).toLowerCase().indexOf('preflight') >= 0) {
+        setStage('validate', 'error');
+        toast('Fix validation issues, then retry deployment.', 'error');
+      } else {
+        setStage('deploy', 'error');
+        toast(msg, 'error');
+      }
     }).finally(function () {
       setLoading(runBtn, false);
+      if (preflightRunEl) setLoading(preflightRunEl, false);
     });
   });
 
@@ -272,8 +405,7 @@
   document.getElementById('reset').addEventListener('click', function () {
     if (!confirm('Reset configuration? This deletes the config file so setup can run again.')) return;
     showLog('Resetting...\n');
-    fetch('/setup/api/reset', { method: 'POST', credentials: 'same-origin' })
-      .then(function (res) { if (res.status === 401) { window.location.href = '/auth/login'; return new Promise(function () {}); } return res.text(); })
+    requestText('/setup/api/reset', { method: 'POST' })
       .then(function (t) {
         appendLog(t + '\n');
         toast('Configuration reset', 'info');
@@ -294,7 +426,7 @@
     setLoading(consoleRunEl, true);
     if (consoleOutEl) { consoleOutEl.textContent = 'Running ' + cmd + '...\n'; consoleOutEl.classList.add('visible'); }
 
-    return httpJson('/setup/api/console/run', {
+    return requestJson('/setup/api/console/run', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ cmd: cmd, arg: arg })
@@ -316,7 +448,7 @@
   function loadConfigRaw() {
     if (!configTextEl) return;
     if (configOutEl) configOutEl.textContent = '';
-    return httpJson('/setup/api/config/raw').then(function (j) {
+    return requestJson('/setup/api/config/raw').then(function (j) {
       if (configPathEl) {
         configPathEl.textContent = (j.path || 'Config file') + (j.exists ? '' : ' (not yet created)');
       }
@@ -333,7 +465,7 @@
     setLoading(configSaveEl, true);
     if (configOutEl) { configOutEl.textContent = 'Saving...\n'; configOutEl.classList.add('visible'); }
 
-    return httpJson('/setup/api/config/raw', {
+    return requestJson('/setup/api/config/raw', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ content: configTextEl.value })
@@ -437,5 +569,7 @@
   }
 
   // ======== Init ========
+  setStage('validate');
+  runPreflight(buildPayload(), true).catch(function () {});
   refreshStatus();
 })();

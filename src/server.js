@@ -1878,6 +1878,35 @@ app.get("/setup", (req, res) => {
 
     .separator { border: 0; border-top: 1px solid var(--border); margin: 1rem 0; }
 
+
+    /* ---- Setup stages ---- */
+    .stage-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1rem; margin-bottom: 0.875rem;
+    }
+    .stage-title { font-size: 0.75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.625rem; }
+    .stage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+    .stage-item {
+      display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.625rem;
+      border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg);
+      font-size: 0.75rem; color: var(--text-dim);
+    }
+    .stage-dot { width: 8px; height: 8px; border-radius: 50%; background: #52525b; flex-shrink: 0; }
+    .stage-item.current { border-color: var(--border-focus); color: var(--text); }
+    .stage-item.current .stage-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
+    .stage-item.done .stage-dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-muted); }
+    .stage-item.error .stage-dot { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-muted); }
+    .preflight-box {
+      display: none; margin-bottom: 0.875rem; padding: 0.75rem 0.875rem;
+      border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2);
+      font-size: 0.75rem;
+    }
+    .preflight-box.visible { display: block; }
+    .preflight-box h4 { margin: 0 0 0.5rem; font-size: 0.75rem; color: var(--text-muted); }
+    .preflight-list { margin: 0; padding-left: 1rem; color: var(--text-dim); }
+    .preflight-list li { margin-bottom: 0.375rem; }
+    .preflight-list .warn { color: #facc15; }
+    .preflight-list .err { color: #f87171; }
     /* ---- Empty state ---- */
     .empty-hint {
       text-align: center; padding: 2rem 1rem; color: var(--text-dim); font-size: 0.8125rem;
@@ -1993,11 +2022,27 @@ app.get("/setup", (req, res) => {
         <input type="hidden" id="flow" value="quickstart" />
       </div>
 
+      <div class="stage-card animate-in animate-in-delay-1">
+        <div class="stage-title">Setup progress</div>
+        <div class="stage-grid" id="stageGrid">
+          <div class="stage-item current" id="stage-validate"><span class="stage-dot"></span><span>Validate</span></div>
+          <div class="stage-item" id="stage-configure"><span class="stage-dot"></span><span>Configure</span></div>
+          <div class="stage-item" id="stage-deploy"><span class="stage-dot"></span><span>Deploy</span></div>
+          <div class="stage-item" id="stage-verify"><span class="stage-dot"></span><span>Verify</span></div>
+        </div>
+      </div>
+
+      <div class="preflight-box" id="preflightBox">
+        <h4>Preflight checks</h4>
+        <ul class="preflight-list" id="preflightList"></ul>
+      </div>
+
       <div class="actions animate-in animate-in-delay-1" style="margin-bottom:0.875rem;">
         <button class="btn btn-primary" id="run">
           <span class="spinner"></span>
           <span class="btn-label">Deploy Configuration</span>
         </button>
+        <button class="btn btn-secondary" id="preflightRun">Run Preflight</button>
         <button class="btn btn-ghost" id="reset">Reset</button>
       </div>
 
@@ -2296,6 +2341,162 @@ function runCmd(cmd, args, opts = {}) {
   });
 }
 
+function getProviderKeyHint(authChoice = "") {
+  if (authChoice === "openai-api-key") return "OpenAI keys usually start with sk-.";
+  if (authChoice === "openrouter-api-key") return "OpenRouter keys usually start with sk-or-v1-.";
+  if (authChoice === "apiKey") return "Anthropic keys usually start with sk-ant-.";
+  if (authChoice === "gemini-api-key") return "Gemini keys are long API key strings from Google AI Studio.";
+  return "Verify the provider key and try again.";
+}
+
+
+function sendSetupError(res, status, code, message, action, details) {
+  return res.status(status).json({
+    ok: false,
+    error: {
+      code,
+      message,
+      action,
+      details: details || null,
+    },
+  });
+}
+
+function classifyOnboardFailure(output = "") {
+  const text = String(output || "").toLowerCase();
+
+  if (text.includes("invalid") && text.includes("api key")) {
+    return {
+      code: "PROVIDER_AUTH_FAILED",
+      message: "Provider authentication failed during onboarding.",
+      action: "Verify provider selection and API key, then run Preflight again.",
+    };
+  }
+
+  if (text.includes("permission denied") || text.includes("eacces") || text.includes("readonly")) {
+    return {
+      code: "STORAGE_PERMISSION_ERROR",
+      message: "OpenClaw could not write required files.",
+      action: "Check OPENCLAW_STATE_DIR/OPENCLAW_WORKSPACE_DIR and volume mount permissions.",
+    };
+  }
+
+  if (text.includes("timeout") || text.includes("timed out")) {
+    return {
+      code: "ONBOARD_TIMEOUT",
+      message: "Onboarding timed out before completion.",
+      action: "Retry once; if it repeats, check network/provider connectivity and logs.",
+    };
+  }
+
+  return {
+    code: "ONBOARD_FAILED",
+    message: "OpenClaw onboarding did not complete successfully.",
+    action: "Review setup output log, fix highlighted issues, and retry deployment.",
+  };
+}
+
+app.post("/setup/api/preflight", async (req, res) => {
+  const payload = req.body || {};
+  const checks = [];
+  const errors = [];
+  const warnings = [];
+
+  const addCheck = (name, ok, message, action, severity = "error") => {
+    checks.push({ name, ok, message, action, severity });
+    if (ok) return;
+    if (severity === "warning") warnings.push({ name, message, action });
+    else errors.push({ name, message, action });
+  };
+
+  const authChoice = (payload.authChoice || "").trim();
+  const authSecret = (payload.authSecret || "").trim();
+  const model = (payload.model || "").trim();
+
+  const needsSecret = authChoice !== "claude-cli" && authChoice !== "codex-cli";
+  addCheck(
+    "providerKey",
+    !needsSecret || Boolean(authSecret),
+    "Provider credential is required for this auth mode.",
+    "Paste a valid API key in the Auth Secret field before deploying.",
+  );
+
+  const providerPatterns = {
+    "openai-api-key": /^sk-/,
+    "openrouter-api-key": /^sk-or-v1-/,
+    apiKey: /^sk-ant-/,
+  };
+  if (needsSecret && providerPatterns[authChoice]) {
+    addCheck(
+      "providerKeyFormat",
+      providerPatterns[authChoice].test(authSecret),
+      "Provider key format looks invalid.",
+      getProviderKeyHint(authChoice),
+      "warning",
+    );
+  }
+
+  const providerNeedsModel = new Set([
+    "openrouter-api-key",
+    "openai-api-key",
+    "gemini-api-key",
+    "ai-gateway-api-key",
+    "apiKey",
+  ]);
+  if (providerNeedsModel.has(authChoice)) {
+    addCheck(
+      "model",
+      Boolean(model),
+      "Model is recommended for this provider.",
+      "Set a model value (for example gpt-4o or anthropic/claude-sonnet-4).",
+      "warning",
+    );
+  }
+
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    addCheck("stateDir", true, `State directory ready: ${STATE_DIR}`, "");
+  } catch (err) {
+    addCheck(
+      "stateDir",
+      false,
+      `Cannot create state directory: ${STATE_DIR}`,
+      "Ensure OPENCLAW_STATE_DIR points to a writable volume path.",
+    );
+  }
+
+  try {
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    addCheck("workspaceDir", true, `Workspace directory ready: ${WORKSPACE_DIR}`, "");
+  } catch (err) {
+    addCheck(
+      "workspaceDir",
+      false,
+      `Cannot create workspace directory: ${WORKSPACE_DIR}`,
+      "Ensure OPENCLAW_WORKSPACE_DIR points to a writable volume path.",
+    );
+  }
+
+  if (STATE_DIR.startsWith("/data") || WORKSPACE_DIR.startsWith("/data")) {
+    addCheck(
+      "dataMount",
+      fs.existsSync("/data"),
+      "Expected Railway volume mount at /data was not found.",
+      "Attach a Railway Volume mounted at /data and redeploy.",
+    );
+  } else {
+    addCheck(
+      "dataMount",
+      false,
+      "State/workspace are not under /data; persistence may be lost on redeploy.",
+      "Set OPENCLAW_STATE_DIR=/data/.openclaw and OPENCLAW_WORKSPACE_DIR=/data/workspace.",
+      "warning",
+    );
+  }
+
+  return res.json({ ok: errors.length === 0, errors, warnings, checks });
+});
+
 app.post("/setup/api/run", async (req, res) => {
   try {
     if (isConfigured()) {
@@ -2303,44 +2504,69 @@ app.post("/setup/api/run", async (req, res) => {
       return res.json({ ok: true, output: "Already configured.\nUse Reset setup if you want to rerun onboarding.\n" });
     }
 
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  const payload = req.body || {};
-  const onboardArgs = buildOnboardArgs(payload);
-  const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
+    const payload = req.body || {};
 
-  let extra = "";
+    const preflightBlockingErrors = [];
+    if ((payload.authChoice || "") !== "claude-cli" && (payload.authChoice || "") !== "codex-cli" && !(payload.authSecret || "").trim()) {
+      preflightBlockingErrors.push("Provider credential is required for this auth mode.");
+    }
+    if (preflightBlockingErrors.length) {
+      return sendSetupError(
+        res,
+        400,
+        "PRECONDITION_FAILED",
+        "Cannot start onboarding due to missing required setup input.",
+        "Run Preflight, fix blockers, and retry deployment.",
+        { blockers: preflightBlockingErrors },
+      );
+    }
 
-  const ok = onboard.code === 0 && isConfigured();
+    const onboardArgs = buildOnboardArgs(payload);
+    const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
 
-  // Optional channel setup (only after successful onboarding, and only if the installed CLI supports it).
-  if (ok) {
+    let extra = "";
+    const ok = onboard.code === 0 && isConfigured();
+
+    if (!ok) {
+      const classified = classifyOnboardFailure(onboard.output);
+      return sendSetupError(
+        res,
+        500,
+        classified.code,
+        classified.message,
+        classified.action,
+        {
+          commandExitCode: onboard.code,
+          outputPreview: (onboard.output || "").slice(0, 3000),
+        },
+      );
+    }
+
+    // Optional channel setup (only after successful onboarding, and only if the installed CLI supports it).
     // The internal gateway uses token auth with the wrapper's known token.
     // OpenClaw 2026.2.4+ rejects "none" as a gateway.auth.mode value.
     const cfgOpts = { timeoutMs: 10_000 };
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.authMode", "token"]), cfgOpts);
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]), cfgOpts);
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]), cfgOpts);
-
-    // Ensure model is written into config (important for OpenRouter where the CLI may not
-    // recognise --model during non-interactive onboarding).
-    const modelVal = (payload.model || "").trim();
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]), cfgOpts);    const modelVal = (payload.model || "").trim();
     if (modelVal) {
       const setModel = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "model", modelVal]));
-      extra += `\n[model] set to ${modelVal} (exit=${setModel.code})\n`;
+      extra += `
+[model] set to ${modelVal} (exit=${setModel.code})
+`;
     }
 
     const channelsHelp = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
     const helpText = channelsHelp.output || "";
-
     const supports = (name) => helpText.includes(name);
 
     if (payload.telegramToken?.trim()) {
       if (!supports("telegram")) {
         extra += "\n[telegram] skipped (this openclaw build does not list telegram in `channels add --help`)\n";
       } else {
-        // Avoid `channels add` here (it has proven flaky across builds); write config directly.
         const token = payload.telegramToken.trim();
         const cfgObj = {
           enabled: true,
@@ -2349,13 +2575,14 @@ app.post("/setup/api/run", async (req, res) => {
           groupPolicy: "allowlist",
           streamMode: "partial",
         };
-        const set = await runCmd(
-          OPENCLAW_NODE,
-          clawArgs(["config", "set", "--json", "channels.telegram", JSON.stringify(cfgObj)]),
-        );
+        const set = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "channels.telegram", JSON.stringify(cfgObj)]));
         const get = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "channels.telegram"]));
-        extra += `\n[telegram config] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}`;
-        extra += `\n[telegram verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`;
+        extra += `
+[telegram config] exit=${set.code} (output ${set.output.length} chars)
+${set.output || "(no output)"}`;
+        extra += `
+[telegram verify] exit=${get.code} (output ${get.output.length} chars)
+${get.output || "(no output)"}`;
       }
     }
 
@@ -2368,17 +2595,16 @@ app.post("/setup/api/run", async (req, res) => {
           enabled: true,
           token,
           groupPolicy: "allowlist",
-          dm: {
-            policy: "pairing",
-          },
+          dm: { policy: "pairing" },
         };
-        const set = await runCmd(
-          OPENCLAW_NODE,
-          clawArgs(["config", "set", "--json", "channels.discord", JSON.stringify(cfgObj)]),
-        );
+        const set = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "channels.discord", JSON.stringify(cfgObj)]));
         const get = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "channels.discord"]));
-        extra += `\n[discord config] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}`;
-        extra += `\n[discord verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`;
+        extra += `
+[discord config] exit=${set.code} (output ${set.output.length} chars)
+${set.output || "(no output)"}`;
+        extra += `
+[discord verify] exit=${get.code} (output ${get.output.length} chars)
+${get.output || "(no output)"}`;
       }
     }
 
@@ -2391,32 +2617,36 @@ app.post("/setup/api/run", async (req, res) => {
           botToken: payload.slackBotToken?.trim() || undefined,
           appToken: payload.slackAppToken?.trim() || undefined,
         };
-        const set = await runCmd(
-          OPENCLAW_NODE,
-          clawArgs(["config", "set", "--json", "channels.slack", JSON.stringify(cfgObj)]),
-        );
+        const set = await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "channels.slack", JSON.stringify(cfgObj)]));
         const get = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "channels.slack"]));
-        extra += `\n[slack config] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}`;
-        extra += `\n[slack verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`;
+        extra += `
+[slack config] exit=${set.code} (output ${set.output.length} chars)
+${set.output || "(no output)"}`;
+        extra += `
+[slack verify] exit=${get.code} (output ${get.output.length} chars)
+${get.output || "(no output)"}`;
       }
     }
 
-    // Start gateway in the background -- don't block the HTTP response.
-    // Railway's proxy has a ~30s timeout and the full setup chain above
-    // can exceed that if we also wait for the gateway to become ready.
     restartGateway().catch((err) => {
       console.error("[/setup/api/run] background gateway start failed:", err);
     });
     extra += "\n[gateway] starting in background...\n";
-  }
 
-  return res.status(ok ? 200 : 500).json({
-    ok,
-    output: `${onboard.output}${extra}`,
-  });
+    return res.status(200).json({
+      ok: true,
+      output: `${onboard.output}${extra}`,
+    });
   } catch (err) {
     console.error("[/setup/api/run] error:", err);
-    return res.status(500).json({ ok: false, output: `Internal error: ${String(err)}` });
+    return sendSetupError(
+      res,
+      500,
+      "SETUP_INTERNAL_ERROR",
+      "Unexpected internal error while running setup.",
+      "Retry setup once. If it fails again, check server logs and run diagnostics from the Tools tab.",
+      { reason: String(err) },
+    );
   }
 });
 
