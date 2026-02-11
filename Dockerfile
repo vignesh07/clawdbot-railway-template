@@ -56,6 +56,10 @@ WORKDIR /app
 # Wrapper deps
 COPY package.json ./
 RUN npm install --omit=dev && npm cache clean --force
+# Patch http-proxy: replace deprecated util._extend with Object.assign (no upstream fix).
+RUN sed -i "s/require('util')._extend/Object.assign/g" \
+    node_modules/http-proxy/lib/http-proxy/index.js \
+    node_modules/http-proxy/lib/http-proxy/common.js
 
 # Copy built openclaw
 COPY --from=openclaw-build /openclaw /openclaw

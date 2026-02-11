@@ -5,6 +5,11 @@ builder = "dockerfile"
 healthcheckPath = "/setup/healthz"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
+requiredMountPath = "/data"
 
 [variables]
 PORT = "8080"
+SETUP_PASSWORD = ""
+OPENCLAW_STATE_DIR = "/data/.openclaw"
+OPENCLAW_GATEWAY_TOKEN = ""
+OPENCLAW_WORKSPACE_DIR = "/data/workspace"

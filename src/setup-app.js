@@ -46,7 +46,7 @@
       advancedToggle.style.display = 'block';
       advancedToggle.style.marginTop = '0.5rem';
       advancedToggle.innerHTML = '<input type="checkbox" id="showAdvancedAuth" /> Show interactive OAuth options (advanced)';
-      authGroupEl.parentNode.insertBefore(advancedToggle, authChoiceEl.parentNode);
+      authChoiceEl.parentNode.insertBefore(advancedToggle, authChoiceEl.nextSibling);
     }
 
     for (var i = 0; i < groups.length; i++) {
@@ -136,9 +136,10 @@
     });
   }
 
-  document.getElementById('run').onclick = function () {
+  document.getElementById('setupForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+
     var payload = {
-      flow: document.getElementById('flow').value,
       authChoice: authChoiceEl.value,
       authSecret: document.getElementById('authSecret').value,
       telegramToken: document.getElementById('telegramToken').value,
@@ -149,6 +150,7 @@
       customProviderId: document.getElementById('customProviderId').value,
       customProviderBaseUrl: document.getElementById('customProviderBaseUrl').value,
       customProviderApi: document.getElementById('customProviderApi').value,
+      customProviderApiKey: document.getElementById('customProviderApiKey').value,
       customProviderApiKeyEnv: document.getElementById('customProviderApiKeyEnv').value,
       customProviderModelId: document.getElementById('customProviderModelId').value
     };
@@ -170,7 +172,7 @@
     }).catch(function (e) {
       logEl.textContent += '\nError: ' + String(e) + '\n';
     });
-  };
+  });
 
   // Debug console runner
   function runConsole() {
