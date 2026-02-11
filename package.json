@@ -9,6 +9,7 @@
     "dev": "node src/server.js",
     "start": "node src/server.js",
     "lint": "node -c src/server.js",
+    "test": "node --test",
     "smoke": "node scripts/smoke.js"
   },
   "dependencies": {
