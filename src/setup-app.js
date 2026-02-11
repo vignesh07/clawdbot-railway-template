@@ -100,7 +100,13 @@
       telegramToken: document.getElementById('telegramToken').value,
       discordToken: document.getElementById('discordToken').value,
       slackBotToken: document.getElementById('slackBotToken').value,
-      slackAppToken: document.getElementById('slackAppToken').value
+      slackAppToken: document.getElementById('slackAppToken').value,
+
+      customProviderId: document.getElementById('customProviderId').value,
+      customProviderBaseUrl: document.getElementById('customProviderBaseUrl').value,
+      customProviderApi: document.getElementById('customProviderApi').value,
+      customProviderApiKeyEnv: document.getElementById('customProviderApiKeyEnv').value,
+      customProviderModelId: document.getElementById('customProviderModelId').value
     };
 
     logEl.textContent = 'Running...\n';

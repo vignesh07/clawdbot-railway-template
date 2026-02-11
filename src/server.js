@@ -408,6 +408,29 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
   </div>
 
   <div class="card">
+    <h2>2b) Advanced: Custom OpenAI-compatible provider (optional)</h2>
+    <p class="muted">Use this to configure an OpenAI-compatible API that requires a custom base URL (e.g. Ollama, vLLM, LM Studio, hosted proxies). You usually set the API key as a Railway variable and reference it here.</p>
+
+    <label>Provider id (e.g. ollama, deepseek, myproxy)</label>
+    <input id="customProviderId" placeholder="ollama" />
+
+    <label>Base URL (must include /v1, e.g. http://host:11434/v1)</label>
+    <input id="customProviderBaseUrl" placeholder="http://127.0.0.1:11434/v1" />
+
+    <label>API (openai-completions or openai-responses)</label>
+    <select id="customProviderApi">
+      <option value="openai-completions">openai-completions</option>
+      <option value="openai-responses">openai-responses</option>
+    </select>
+
+    <label>API key env var name (optional, e.g. OLLAMA_API_KEY). Leave blank for no key.</label>
+    <input id="customProviderApiKeyEnv" placeholder="OLLAMA_API_KEY" />
+
+    <label>Optional model id to register (e.g. llama3.1:8b)</label>
+    <input id="customProviderModelId" placeholder="" />
+  </div>
+
+  <div class="card">
     <h2>3) Run onboarding</h2>
     <button id="run">Run setup</button>
     <button id="pairingApprove" style="background:#1f2937; margin-left:0.5rem">Approve pairing</button>
@@ -599,7 +622,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
   const ok = onboard.code === 0 && isConfigured();
 
-  // Optional channel setup (only after successful onboarding, and only if the installed CLI supports it).
+  // Optional setup (only after successful onboarding).
   if (ok) {
     // Ensure gateway token is written into config so the browser UI can authenticate reliably.
     // (We also enforce loopback bind since the wrapper proxies externally.)
@@ -610,6 +633,40 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.remote.token", OPENCLAW_GATEWAY_TOKEN]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
+
+    // Optional: configure a custom OpenAI-compatible provider (base URL) for advanced users.
+    if (payload.customProviderId?.trim() && payload.customProviderBaseUrl?.trim()) {
+      const providerId = payload.customProviderId.trim();
+      const baseUrl = payload.customProviderBaseUrl.trim();
+      const api = (payload.customProviderApi || "openai-completions").trim();
+      const apiKeyEnv = (payload.customProviderApiKeyEnv || "").trim();
+      const modelId = (payload.customProviderModelId || "").trim();
+
+      if (!/^[A-Za-z0-9_-]+$/.test(providerId)) {
+        extra += `\n[custom provider] skipped: invalid provider id (use letters/numbers/_/-)`;
+      } else if (!/^https?:\/\//.test(baseUrl)) {
+        extra += `\n[custom provider] skipped: baseUrl must start with http(s)://`;
+      } else if (api !== "openai-completions" && api !== "openai-responses") {
+        extra += `\n[custom provider] skipped: api must be openai-completions or openai-responses`;
+      } else if (apiKeyEnv && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
+        extra += `\n[custom provider] skipped: invalid api key env var name`;
+      } else {
+        const providerCfg = {
+          baseUrl,
+          api,
+          apiKey: apiKeyEnv ? "${" + apiKeyEnv + "}" : undefined,
+          models: modelId ? [{ id: modelId, name: modelId }] : undefined,
+        };
+
+        // Ensure we merge in this provider rather than replacing other providers.
+        await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "models.mode", "merge"]));
+        const set = await runCmd(
+          OPENCLAW_NODE,
+          clawArgs(["config", "set", "--json", `models.providers.${providerId}`, JSON.stringify(providerCfg)]),
+        );
+        extra += `\n[custom provider] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}`;
+      }
+    }
 
     const channelsHelp = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
     const helpText = channelsHelp.output || "";
