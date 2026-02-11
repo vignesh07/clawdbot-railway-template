@@ -504,7 +504,7 @@ function buildOnboardArgs(payload) {
     "--gateway-token",
     OPENCLAW_GATEWAY_TOKEN,
     "--flow",
-    payload.flow || "quickstart"
+    payload.flow || "quickstart",
   ];
 
   if (payload.authChoice) {
@@ -524,15 +524,25 @@ function buildOnboardArgs(payload) {
       "minimax-api": "--minimax-api-key",
       "minimax-api-lightning": "--minimax-api-key",
       "synthetic-api-key": "--synthetic-api-key",
-      "opencode-zen": "--opencode-zen-api-key"
+      "opencode-zen": "--opencode-zen-api-key",
     };
+
     const flag = map[payload.authChoice];
-    if (flag && secret) {
+
+    // If the user picked an API-key auth choice but didn't provide a secret, fail fast.
+    // Otherwise OpenClaw may fall back to its default auth choice, which looks like the
+    // wizard "reverted" their selection.
+    if (flag && !secret) {
+      throw new Error(`Missing auth secret for authChoice=${payload.authChoice}`);
+    }
+
+    if (flag) {
       args.push(flag, secret);
     }
 
-    if (payload.authChoice === "token" && secret) {
-      // This is the Anthropics setup-token flow.
+    if (payload.authChoice === "token") {
+      // This is the Anthropic setup-token flow.
+      if (!secret) throw new Error("Missing auth secret for authChoice=token");
       args.push("--token-provider", "anthropic", "--token", secret);
     }
   }
@@ -571,12 +581,19 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       return res.json({ ok: true, output: "Already configured.\nUse Reset setup if you want to rerun onboarding.\n" });
     }
 
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  const payload = req.body || {};
-  const onboardArgs = buildOnboardArgs(payload);
-  const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
+    const payload = req.body || {};
+
+    let onboardArgs;
+    try {
+      onboardArgs = buildOnboardArgs(payload);
+    } catch (err) {
+      return res.status(400).json({ ok: false, output: `Setup input error: ${String(err)}` });
+    }
+
+    const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
 
   let extra = "";
 
