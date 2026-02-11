@@ -29,8 +29,25 @@
     statusEl.textContent = s;
   }
 
+  function isInteractiveOAuth(optionValue, optionLabel) {
+    var v = String(optionValue || '');
+    var l = String(optionLabel || '');
+    return l.indexOf('OAuth') !== -1 || v.indexOf('cli') !== -1 || v.indexOf('codex') !== -1 || v.indexOf('portal') !== -1;
+  }
+
   function renderAuth(groups) {
     authGroupEl.innerHTML = '';
+
+    // Toggle for showing interactive OAuth choices.
+    var advancedToggle = document.getElementById('showAdvancedAuth');
+    if (!advancedToggle) {
+      advancedToggle = document.createElement('label');
+      advancedToggle.style.display = 'block';
+      advancedToggle.style.marginTop = '0.5rem';
+      advancedToggle.innerHTML = '<input type="checkbox" id="showAdvancedAuth" /> Show interactive OAuth options (advanced)';
+      authGroupEl.parentNode.insertBefore(advancedToggle, authChoiceEl.parentNode);
+    }
+
     for (var i = 0; i < groups.length; i++) {
       var g = groups[i];
       var opt = document.createElement('option');
@@ -39,23 +56,37 @@
       authGroupEl.appendChild(opt);
     }
 
-    authGroupEl.onchange = function () {
+    function rerenderChoices() {
       var sel = null;
       for (var j = 0; j < groups.length; j++) {
         if (groups[j].value === authGroupEl.value) sel = groups[j];
       }
       authChoiceEl.innerHTML = '';
       var opts = (sel && sel.options) ? sel.options : [];
+      var showAdv = Boolean(document.getElementById('showAdvancedAuth') && document.getElementById('showAdvancedAuth').checked);
+
+      var firstNonInteractive = null;
       for (var k = 0; k < opts.length; k++) {
         var o = opts[k];
+        var interactive = isInteractiveOAuth(o.value, o.label);
+        if (interactive && !showAdv) continue;
+        if (!interactive && !firstNonInteractive) firstNonInteractive = o.value;
+
         var opt2 = document.createElement('option');
         opt2.value = o.value;
-        opt2.textContent = o.label + (o.hint ? ' - ' + o.hint : '');
+        opt2.textContent = o.label + (interactive ? ' (interactive OAuth)' : '');
         authChoiceEl.appendChild(opt2);
       }
-    };
 
-    authGroupEl.onchange();
+      // Prefer selecting a non-interactive option by default.
+      if (firstNonInteractive) authChoiceEl.value = firstNonInteractive;
+    }
+
+    authGroupEl.onchange = rerenderChoices;
+    var advEl = document.getElementById('showAdvancedAuth');
+    if (advEl) advEl.onchange = rerenderChoices;
+
+    rerenderChoices();
   }
 
   function httpJson(url, opts) {

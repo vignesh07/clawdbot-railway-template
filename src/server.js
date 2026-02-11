@@ -485,6 +485,7 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
 
   // We reuse OpenClaw's own auth-choice grouping logic indirectly by hardcoding the same group defs.
   // This is intentionally minimal; later we can parse the CLI help output to stay perfectly in sync.
+  // NOTE: On Railway, interactive OAuth flows are typically not viable. The UI will hide them by default.
   const authGroups = [
     { value: "openai", label: "OpenAI", hint: "Codex OAuth + API key", options: [
       { value: "codex-cli", label: "OpenAI Codex OAuth (Codex CLI)" },
