@@ -1021,7 +1021,7 @@ app.use(async (req, res) => {
   return proxy.web(req, res, { target: GATEWAY_TARGET });
 });
 
-const server = app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, "0.0.0.0", async () => {
   console.log(`[wrapper] listening on :${PORT}`);
   console.log(`[wrapper] state dir: ${STATE_DIR}`);
   console.log(`[wrapper] workspace dir: ${WORKSPACE_DIR}`);
@@ -1030,7 +1030,18 @@ const server = app.listen(PORT, "0.0.0.0", () => {
   if (!SETUP_PASSWORD) {
     console.warn("[wrapper] WARNING: SETUP_PASSWORD is not set; /setup will error.");
   }
-  // Don't start gateway unless configured; proxy will ensure it starts.
+
+  // Auto-start the gateway if already configured so polling channels (Telegram/Discord/etc.)
+  // work even if nobody visits the web UI.
+  if (isConfigured()) {
+    console.log("[wrapper] config detected; starting gateway...");
+    try {
+      await ensureGatewayRunning();
+      console.log("[wrapper] gateway ready");
+    } catch (err) {
+      console.error(`[wrapper] gateway failed to start at boot: ${String(err)}`);
+    }
+  }
 });
 
 server.on("upgrade", async (req, socket, head) => {
