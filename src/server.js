@@ -341,6 +341,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
   <div class="card">
     <h2>Status</h2>
     <div id="status">Loading...</div>
+    <div id="statusDetails" class="muted" style="margin-top:0.5rem"></div>
     <div style="margin-top: 0.75rem">
       <a href="/openclaw" target="_blank">Open OpenClaw UI</a>
       &nbsp;|&nbsp;

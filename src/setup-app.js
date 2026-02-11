@@ -3,6 +3,7 @@
 
 (function () {
   var statusEl = document.getElementById('status');
+  var statusDetailsEl = document.getElementById('statusDetails');
   var authGroupEl = document.getElementById('authGroup');
   var authChoiceEl = document.getElementById('authChoice');
   var logEl = document.getElementById('log');
@@ -104,10 +105,21 @@
 
   function refreshStatus() {
     setStatus('Loading...');
+    if (statusDetailsEl) statusDetailsEl.textContent = '';
+
     return httpJson('/setup/api/status').then(function (j) {
       var ver = j.openclawVersion ? (' | ' + j.openclawVersion) : '';
-      setStatus((j.configured ? 'Configured - open /openclaw' : 'Not configured - run setup below') + ver);
+      setStatus((j.configured ? 'Configured' : 'Not configured - run setup below') + ver);
+
+      if (statusDetailsEl) {
+        var parts = [];
+        parts.push('Gateway target: ' + (j.gatewayTarget || '(unknown)'));
+        parts.push('Tip: /healthz shows wrapper+gateway reachability.');
+        statusDetailsEl.textContent = parts.join('\n');
+      }
+
       renderAuth(j.authGroups || []);
+
       // If channels are unsupported, surface it for debugging.
       if (j.channelsAddHelp && j.channelsAddHelp.indexOf('telegram') === -1) {
         logEl.textContent += '\nNote: this openclaw build does not list telegram in `channels add --help`. Telegram auto-add will be skipped.\n';
@@ -120,6 +132,7 @@
 
     }).catch(function (e) {
       setStatus('Error: ' + String(e));
+      if (statusDetailsEl) statusDetailsEl.textContent = '';
     });
   }
 
