@@ -282,6 +282,34 @@ app.use(express.json({ limit: "1mb" }));
 // Minimal health endpoint for Railway.
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
+// Public health endpoint (no auth) so Railway can probe without /setup.
+// Keep this free of secrets.
+app.get("/healthz", async (_req, res) => {
+  let gatewayReachable = false;
+  if (isConfigured()) {
+    try {
+      gatewayReachable = await probeGateway();
+    } catch {
+      gatewayReachable = false;
+    }
+  }
+
+  res.json({
+    ok: true,
+    wrapper: {
+      configured: isConfigured(),
+      stateDir: STATE_DIR,
+      workspaceDir: WORKSPACE_DIR,
+    },
+    gateway: {
+      target: GATEWAY_TARGET,
+      reachable: gatewayReachable,
+      lastError: lastGatewayError,
+      lastExit: lastGatewayExit,
+    },
+  });
+});
+
 app.get("/setup/app.js", requireSetupAuth, (_req, res) => {
   // Serve JS for /setup (kept external to avoid inline encoding/template issues)
   res.type("application/javascript");
