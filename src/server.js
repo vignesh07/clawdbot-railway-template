@@ -100,16 +100,34 @@ function clawArgs(args) {
   return [OPENCLAW_ENTRY, ...args];
 }
 
+function resolveConfigCandidates() {
+  const explicit = getEnvWithShim("OPENCLAW_CONFIG_PATH", "CLAWDBOT_CONFIG_PATH");
+  if (explicit) return [explicit];
+
+  // Prefer the newest canonical name, but fall back to legacy filenames if present.
+  return [
+    path.join(STATE_DIR, "openclaw.json"),
+    path.join(STATE_DIR, "moltbot.json"),
+    path.join(STATE_DIR, "clawdbot.json"),
+  ];
+}
+
 function configPath() {
-  return (
-    getEnvWithShim("OPENCLAW_CONFIG_PATH", "CLAWDBOT_CONFIG_PATH") ||
-    path.join(STATE_DIR, "openclaw.json")
-  );
+  const candidates = resolveConfigCandidates();
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      // ignore
+    }
+  }
+  // Default to canonical even if it doesn't exist yet.
+  return candidates[0] || path.join(STATE_DIR, "openclaw.json");
 }
 
 function isConfigured() {
   try {
-    return fs.existsSync(configPath());
+    return resolveConfigCandidates().some((candidate) => fs.existsSync(candidate));
   } catch {
     return false;
   }
@@ -117,6 +135,10 @@ function isConfigured() {
 
 let gatewayProc = null;
 let gatewayStarting = null;
+
+// Debug breadcrumbs for common Railway failures (502 / "Application failed to respond").
+let lastGatewayError = null;
+let lastGatewayExit = null;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -176,12 +198,16 @@ async function startGateway() {
   });
 
   gatewayProc.on("error", (err) => {
-    console.error(`[gateway] spawn error: ${String(err)}`);
+    const msg = `[gateway] spawn error: ${String(err)}`;
+    console.error(msg);
+    lastGatewayError = msg;
     gatewayProc = null;
   });
 
   gatewayProc.on("exit", (code, signal) => {
-    console.error(`[gateway] exited code=${code} signal=${signal}`);
+    const msg = `[gateway] exited code=${code} signal=${signal}`;
+    console.error(msg);
+    lastGatewayExit = { code, signal, at: new Date().toISOString() };
     gatewayProc = null;
   });
 }
@@ -191,10 +217,17 @@ async function ensureGatewayRunning() {
   if (gatewayProc) return { ok: true };
   if (!gatewayStarting) {
     gatewayStarting = (async () => {
-      await startGateway();
-      const ready = await waitForGatewayReady({ timeoutMs: 20_000 });
-      if (!ready) {
-        throw new Error("Gateway did not become ready in time");
+      try {
+        lastGatewayError = null;
+        await startGateway();
+        const ready = await waitForGatewayReady({ timeoutMs: 20_000 });
+        if (!ready) {
+          throw new Error("Gateway did not become ready in time");
+        }
+      } catch (err) {
+        const msg = `[gateway] start failure: ${String(err)}`;
+        lastGatewayError = msg;
+        throw err;
       }
     })().finally(() => {
       gatewayStarting = null;
@@ -309,6 +342,8 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
         <option value="openclaw.logs.tail">openclaw logs --tail N</option>
         <option value="openclaw.config.get">openclaw config get &lt;path&gt;</option>
         <option value="openclaw.version">openclaw --version</option>
+        <option value="openclaw.devices.list">openclaw devices list</option>
+        <option value="openclaw.devices.approve">openclaw devices approve &lt;requestId&gt;</option>
       </select>
       <input id="consoleArg" placeholder="Optional arg (e.g. 200, gateway.port)" style="flex: 1" />
       <button id="consoleRun" style="background:#0f172a">Run</button>
@@ -370,6 +405,29 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
 
     <label>Slack app token (optional)</label>
     <input id="slackAppToken" type="password" placeholder="xapp-..." />
+  </div>
+
+  <div class="card">
+    <h2>2b) Advanced: Custom OpenAI-compatible provider (optional)</h2>
+    <p class="muted">Use this to configure an OpenAI-compatible API that requires a custom base URL (e.g. Ollama, vLLM, LM Studio, hosted proxies). You usually set the API key as a Railway variable and reference it here.</p>
+
+    <label>Provider id (e.g. ollama, deepseek, myproxy)</label>
+    <input id="customProviderId" placeholder="ollama" />
+
+    <label>Base URL (must include /v1, e.g. http://host:11434/v1)</label>
+    <input id="customProviderBaseUrl" placeholder="http://127.0.0.1:11434/v1" />
+
+    <label>API (openai-completions or openai-responses)</label>
+    <select id="customProviderApi">
+      <option value="openai-completions">openai-completions</option>
+      <option value="openai-responses">openai-responses</option>
+    </select>
+
+    <label>API key env var name (optional, e.g. OLLAMA_API_KEY). Leave blank for no key.</label>
+    <input id="customProviderApiKeyEnv" placeholder="OLLAMA_API_KEY" />
+
+    <label>Optional model id to register (e.g. llama3.1:8b)</label>
+    <input id="customProviderModelId" placeholder="" />
   </div>
 
   <div class="card">
@@ -469,7 +527,7 @@ function buildOnboardArgs(payload) {
     "--gateway-token",
     OPENCLAW_GATEWAY_TOKEN,
     "--flow",
-    payload.flow || "quickstart"
+    payload.flow || "quickstart",
   ];
 
   if (payload.authChoice) {
@@ -489,15 +547,25 @@ function buildOnboardArgs(payload) {
       "minimax-api": "--minimax-api-key",
       "minimax-api-lightning": "--minimax-api-key",
       "synthetic-api-key": "--synthetic-api-key",
-      "opencode-zen": "--opencode-zen-api-key"
+      "opencode-zen": "--opencode-zen-api-key",
     };
+
     const flag = map[payload.authChoice];
-    if (flag && secret) {
+
+    // If the user picked an API-key auth choice but didn't provide a secret, fail fast.
+    // Otherwise OpenClaw may fall back to its default auth choice, which looks like the
+    // wizard "reverted" their selection.
+    if (flag && !secret) {
+      throw new Error(`Missing auth secret for authChoice=${payload.authChoice}`);
+    }
+
+    if (flag) {
       args.push(flag, secret);
     }
 
-    if (payload.authChoice === "token" && secret) {
-      // This is the Anthropics setup-token flow.
+    if (payload.authChoice === "token") {
+      // This is the Anthropic setup-token flow.
+      if (!secret) throw new Error("Missing auth secret for authChoice=token");
       args.push("--token-provider", "anthropic", "--token", secret);
     }
   }
@@ -536,25 +604,69 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       return res.json({ ok: true, output: "Already configured.\nUse Reset setup if you want to rerun onboarding.\n" });
     }
 
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  const payload = req.body || {};
-  const onboardArgs = buildOnboardArgs(payload);
-  const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
+    const payload = req.body || {};
+
+    let onboardArgs;
+    try {
+      onboardArgs = buildOnboardArgs(payload);
+    } catch (err) {
+      return res.status(400).json({ ok: false, output: `Setup input error: ${String(err)}` });
+    }
+
+    const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
 
   let extra = "";
 
   const ok = onboard.code === 0 && isConfigured();
 
-  // Optional channel setup (only after successful onboarding, and only if the installed CLI supports it).
+  // Optional setup (only after successful onboarding).
   if (ok) {
     // Ensure gateway token is written into config so the browser UI can authenticate reliably.
     // (We also enforce loopback bind since the wrapper proxies externally.)
+    // IMPORTANT: Set both gateway.auth.token (server-side) and gateway.remote.token (client-side)
+    // to the same value so the Control UI can connect without "token mismatch" errors.
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.remote.token", OPENCLAW_GATEWAY_TOKEN]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
+
+    // Optional: configure a custom OpenAI-compatible provider (base URL) for advanced users.
+    if (payload.customProviderId?.trim() && payload.customProviderBaseUrl?.trim()) {
+      const providerId = payload.customProviderId.trim();
+      const baseUrl = payload.customProviderBaseUrl.trim();
+      const api = (payload.customProviderApi || "openai-completions").trim();
+      const apiKeyEnv = (payload.customProviderApiKeyEnv || "").trim();
+      const modelId = (payload.customProviderModelId || "").trim();
+
+      if (!/^[A-Za-z0-9_-]+$/.test(providerId)) {
+        extra += `\n[custom provider] skipped: invalid provider id (use letters/numbers/_/-)`;
+      } else if (!/^https?:\/\//.test(baseUrl)) {
+        extra += `\n[custom provider] skipped: baseUrl must start with http(s)://`;
+      } else if (api !== "openai-completions" && api !== "openai-responses") {
+        extra += `\n[custom provider] skipped: api must be openai-completions or openai-responses`;
+      } else if (apiKeyEnv && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
+        extra += `\n[custom provider] skipped: invalid api key env var name`;
+      } else {
+        const providerCfg = {
+          baseUrl,
+          api,
+          apiKey: apiKeyEnv ? "${" + apiKeyEnv + "}" : undefined,
+          models: modelId ? [{ id: modelId, name: modelId }] : undefined,
+        };
+
+        // Ensure we merge in this provider rather than replacing other providers.
+        await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "models.mode", "merge"]));
+        const set = await runCmd(
+          OPENCLAW_NODE,
+          clawArgs(["config", "set", "--json", `models.providers.${providerId}`, JSON.stringify(providerCfg)]),
+        );
+        extra += `\n[custom provider] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}`;
+      }
+    }
 
     const channelsHelp = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
     const helpText = channelsHelp.output || "";
@@ -643,15 +755,24 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
   const v = await runCmd(OPENCLAW_NODE, clawArgs(["--version"]));
   const help = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
+
   res.json({
     wrapper: {
       node: process.version,
       port: PORT,
+      publicPortEnv: process.env.PORT || null,
       stateDir: STATE_DIR,
       workspaceDir: WORKSPACE_DIR,
-      configPath: configPath(),
+      configured: isConfigured(),
+      configPathResolved: configPath(),
+      configPathCandidates: typeof resolveConfigCandidates === "function" ? resolveConfigCandidates() : null,
+      internalGatewayHost: INTERNAL_GATEWAY_HOST,
+      internalGatewayPort: INTERNAL_GATEWAY_PORT,
+      gatewayTarget: GATEWAY_TARGET,
       gatewayTokenFromEnv: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN?.trim()),
       gatewayTokenPersisted: fs.existsSync(path.join(STATE_DIR, "gateway.token")),
+      lastGatewayError,
+      lastGatewayExit,
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
     },
     openclaw: {
@@ -688,6 +809,10 @@ const ALLOWED_CONSOLE_COMMANDS = new Set([
   "openclaw.doctor",
   "openclaw.logs.tail",
   "openclaw.config.get",
+
+  // Device management (for fixing "disconnected (1008): pairing required")
+  "openclaw.devices.list",
+  "openclaw.devices.approve",
 ]);
 
 app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
@@ -741,6 +866,23 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
     if (cmd === "openclaw.config.get") {
       if (!arg) return res.status(400).json({ ok: false, error: "Missing config path" });
       const r = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", arg]));
+      return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
+    }
+
+    // Device management commands (for fixing "disconnected (1008): pairing required")
+    if (cmd === "openclaw.devices.list") {
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["devices", "list"]));
+      return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
+    }
+    if (cmd === "openclaw.devices.approve") {
+      const requestId = String(arg || "").trim();
+      if (!requestId) {
+        return res.status(400).json({ ok: false, error: "Missing device request ID" });
+      }
+      if (!/^[A-Za-z0-9_-]+$/.test(requestId)) {
+        return res.status(400).json({ ok: false, error: "Invalid device request ID" });
+      }
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["devices", "approve", requestId]));
       return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
     }
 
@@ -970,14 +1112,22 @@ app.use(async (req, res) => {
     try {
       await ensureGatewayRunning();
     } catch (err) {
-      return res.status(503).type("text/plain").send(`Gateway not ready: ${String(err)}`);
+      const hint = [
+        "Gateway not ready.",
+        String(err),
+        lastGatewayError ? `\n${lastGatewayError}` : "",
+        "\nTroubleshooting:",
+        "- Visit /setup and check the Debug Console",
+        "- Visit /setup/api/debug for config + gateway diagnostics",
+      ].join("\n");
+      return res.status(503).type("text/plain").send(hint);
     }
   }
 
   return proxy.web(req, res, { target: GATEWAY_TARGET });
 });
 
-const server = app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, "0.0.0.0", async () => {
   console.log(`[wrapper] listening on :${PORT}`);
   console.log(`[wrapper] state dir: ${STATE_DIR}`);
   console.log(`[wrapper] workspace dir: ${WORKSPACE_DIR}`);
@@ -986,7 +1136,18 @@ const server = app.listen(PORT, "0.0.0.0", () => {
   if (!SETUP_PASSWORD) {
     console.warn("[wrapper] WARNING: SETUP_PASSWORD is not set; /setup will error.");
   }
-  // Don't start gateway unless configured; proxy will ensure it starts.
+
+  // Auto-start the gateway if already configured so polling channels (Telegram/Discord/etc.)
+  // work even if nobody visits the web UI.
+  if (isConfigured()) {
+    console.log("[wrapper] config detected; starting gateway...");
+    try {
+      await ensureGatewayRunning();
+      console.log("[wrapper] gateway ready");
+    } catch (err) {
+      console.error(`[wrapper] gateway failed to start at boot: ${String(err)}`);
+    }
+  }
 });
 
 server.on("upgrade", async (req, socket, head) => {

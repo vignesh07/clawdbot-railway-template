@@ -36,7 +36,7 @@ Optional:
 - `OPENCLAW_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
 
 Notes:
-- This template pins OpenClaw to a known-good version by default via Docker build arg `OPENCLAW_GIT_REF`.
+- This template pins OpenClaw to a released version by default via Docker build arg `OPENCLAW_GIT_REF` (override if you want `main`).
 - **Backward compatibility:** The wrapper includes a shim for `CLAWDBOT_*` environment variables (logs a deprecation warning when used). `MOLTBOT_*` variables are **not** shimmed — this repo never shipped with MOLTBOT prefixes, so no existing deployments rely on them.
 
 4) Enable **Public Networking** (HTTP). Railway will assign a domain.
@@ -62,6 +62,45 @@ Then:
 3) Open the **Bot** tab → **Add Bot**
 4) Copy the **Bot Token** and paste it into `/setup`
 5) Invite the bot to your server (OAuth2 URL Generator → scopes: `bot`, `applications.commands`; then choose permissions)
+
+## Troubleshooting
+
+### “disconnected (1008): pairing required” / dashboard health offline
+
+This is not a crash — it means the gateway is running, but no device has been approved yet.
+
+Fix:
+- Open `/setup`
+- Use the **Debug Console**:
+  - `openclaw devices list`
+  - `openclaw devices approve <requestId>`
+
+### “unauthorized: gateway token mismatch”
+
+The Control UI connects using `gateway.remote.token` and the gateway validates `gateway.auth.token`.
+
+Fix:
+- Re-run `/setup` so the wrapper writes both tokens.
+- Or set both values to the same token in config.
+
+### “Application failed to respond” / 502 Bad Gateway
+
+Most often this means the wrapper is up, but the gateway can’t start or can’t bind.
+
+Checklist:
+- Ensure you mounted a **Volume** at `/data` and set:
+  - `OPENCLAW_STATE_DIR=/data/.openclaw`
+  - `OPENCLAW_WORKSPACE_DIR=/data/workspace`
+- Ensure **Public Networking** is enabled and `PORT=8080`.
+- Check Railway logs for the wrapper error: it will show `Gateway not ready:` with the reason.
+
+### Build OOM (out of memory) on Railway
+
+Building OpenClaw from source can exceed small memory tiers.
+
+Recommendations:
+- Use a plan with **2GB+ memory**.
+- If you see `Reached heap limit Allocation failed - JavaScript heap out of memory`, upgrade memory and redeploy.
 
 ## Local smoke test
 

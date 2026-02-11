@@ -1,0 +1,43 @@
+name: Bump OpenClaw release ref
+
+on:
+  schedule:
+    - cron: "23 9 * * *" # daily 09:23 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Bump Dockerfile OPENCLAW_GIT_REF if needed
+        run: node scripts/bump-openclaw-ref.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: bump OPENCLAW_GIT_REF to latest release"
+          title: "chore: bump OPENCLAW_GIT_REF to latest OpenClaw release"
+          body: |
+            Automated update of the default OpenClaw build ref (`OPENCLAW_GIT_REF`) to the latest upstream release tag.
+
+            This keeps the Railway template stable-by-default while staying current.
+          branch: chore/bump-openclaw-ref
+          delete-branch: true
+          labels: |
+            automated
+            dependencies
