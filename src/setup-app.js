@@ -46,7 +46,14 @@
       advancedToggle.style.display = 'block';
       advancedToggle.style.marginTop = '0.5rem';
       advancedToggle.innerHTML = '<input type="checkbox" id="showAdvancedAuth" /> Show interactive OAuth options (advanced)';
-      authGroupEl.parentNode.insertBefore(advancedToggle, authChoiceEl.parentNode);
+      var authContainer = authGroupEl && authGroupEl.parentNode;
+      var authMethodLabel = authChoiceEl && authChoiceEl.previousElementSibling;
+      var insertBeforeNode = authMethodLabel || authChoiceEl;
+      if (authContainer && insertBeforeNode && insertBeforeNode.parentNode === authContainer) {
+        authContainer.insertBefore(advancedToggle, insertBeforeNode);
+      } else if (authContainer) {
+        authContainer.appendChild(advancedToggle);
+      }
     }
 
     for (var i = 0; i < groups.length; i++) {
