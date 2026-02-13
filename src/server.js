@@ -8,29 +8,15 @@ import express from "express";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
 
-/** @type {Set<string>} */
-const warnedDeprecatedEnv = new Set();
-
-/**
- * Prefer `primaryKey`, fall back to `deprecatedKey` with a one-time warning.
- * @param {string} primaryKey
- * @param {string} deprecatedKey
- */
-function getEnvWithShim(primaryKey, deprecatedKey) {
-  const primary = process.env[primaryKey]?.trim();
-  if (primary) return primary;
-
-  const deprecated = process.env[deprecatedKey]?.trim();
-  if (!deprecated) return undefined;
-
-  if (!warnedDeprecatedEnv.has(deprecatedKey)) {
-    console.warn(
-      `[deprecation] ${deprecatedKey} is deprecated. Use ${primaryKey} instead.`,
-    );
-    warnedDeprecatedEnv.add(deprecatedKey);
+// Migrate deprecated CLAWDBOT_* env vars → OPENCLAW_* so existing Railway deployments
+// keep working. Users should update their Railway Variables to use the new names.
+for (const suffix of ["PUBLIC_PORT", "STATE_DIR", "WORKSPACE_DIR", "GATEWAY_TOKEN", "CONFIG_PATH"]) {
+  const oldKey = `CLAWDBOT_${suffix}`;
+  const newKey = `OPENCLAW_${suffix}`;
+  if (process.env[oldKey] && !process.env[newKey]) {
+    process.env[newKey] = process.env[oldKey];
+    console.warn(`[migration] Copied ${oldKey} → ${newKey}. Please rename this variable in your Railway settings.`);
   }
-
-  return deprecated;
 }
 
 // Railway deployments sometimes inject PORT=3000 by default. We want the wrapper to
@@ -38,7 +24,7 @@ function getEnvWithShim(primaryKey, deprecatedKey) {
 //
 // Prefer OPENCLAW_PUBLIC_PORT (set in the Dockerfile / template) over PORT.
 const PORT = Number.parseInt(
-  getEnvWithShim("OPENCLAW_PUBLIC_PORT", "CLAWDBOT_PUBLIC_PORT") ??
+  process.env.OPENCLAW_PUBLIC_PORT?.trim() ??
     process.env.PORT ??
     "8080",
   10,
@@ -47,11 +33,11 @@ const PORT = Number.parseInt(
 // State/workspace
 // OpenClaw defaults to ~/.openclaw.
 const STATE_DIR =
-  getEnvWithShim("OPENCLAW_STATE_DIR", "CLAWDBOT_STATE_DIR") ||
+  process.env.OPENCLAW_STATE_DIR?.trim() ||
   path.join(os.homedir(), ".openclaw");
 
 const WORKSPACE_DIR =
-  getEnvWithShim("OPENCLAW_WORKSPACE_DIR", "CLAWDBOT_WORKSPACE_DIR") ||
+  process.env.OPENCLAW_WORKSPACE_DIR?.trim() ||
   path.join(STATE_DIR, "workspace");
 
 // Protect /setup with a user-provided password.
@@ -60,10 +46,7 @@ const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
 // Gateway admin token (protects OpenClaw gateway + Control UI).
 // Must be stable across restarts. If not provided via env, persist it in the state dir.
 function resolveGatewayToken() {
-  const envTok = getEnvWithShim(
-    "OPENCLAW_GATEWAY_TOKEN",
-    "CLAWDBOT_GATEWAY_TOKEN",
-  );
+  const envTok = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
   if (envTok) return envTok;
 
   const tokenPath = path.join(STATE_DIR, "gateway.token");
@@ -101,15 +84,10 @@ function clawArgs(args) {
 }
 
 function resolveConfigCandidates() {
-  const explicit = getEnvWithShim("OPENCLAW_CONFIG_PATH", "CLAWDBOT_CONFIG_PATH");
+  const explicit = process.env.OPENCLAW_CONFIG_PATH?.trim();
   if (explicit) return [explicit];
 
-  // Prefer the newest canonical name, but fall back to legacy filenames if present.
-  return [
-    path.join(STATE_DIR, "openclaw.json"),
-    path.join(STATE_DIR, "moltbot.json"),
-    path.join(STATE_DIR, "clawdbot.json"),
-  ];
+  return [path.join(STATE_DIR, "openclaw.json")];
 }
 
 function configPath() {
@@ -133,6 +111,26 @@ function isConfigured() {
   }
 }
 
+// One-time migration: rename legacy config files to openclaw.json so existing
+// deployments that still have the old filename on their volume keep working.
+(function migrateLegacyConfigFile() {
+  const canonical = path.join(STATE_DIR, "openclaw.json");
+  if (fs.existsSync(canonical)) return;
+
+  for (const legacy of ["clawdbot.json", "moltbot.json"]) {
+    const legacyPath = path.join(STATE_DIR, legacy);
+    try {
+      if (fs.existsSync(legacyPath)) {
+        fs.renameSync(legacyPath, canonical);
+        console.log(`[migration] Renamed ${legacy} → openclaw.json`);
+        return;
+      }
+    } catch (err) {
+      console.warn(`[migration] Failed to rename ${legacy}: ${err}`);
+    }
+  }
+})();
+
 let gatewayProc = null;
 let gatewayStarting = null;
 
@@ -151,8 +149,8 @@ async function waitForGatewayReady(opts = {}) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      // Try the default Control UI base path, then fall back to legacy or root.
-      const paths = ["/openclaw", "/clawdbot", "/"]; 
+      // Try the default Control UI base path, then fall back to root.
+      const paths = ["/openclaw", "/"];
       for (const p of paths) {
         try {
           const res = await fetch(`${GATEWAY_TARGET}${p}`, { method: "GET" });

@@ -37,7 +37,6 @@ Optional:
 
 Notes:
 - This template pins OpenClaw to a released version by default via Docker build arg `OPENCLAW_GIT_REF` (override if you want `main`).
-- **Backward compatibility:** The wrapper includes a shim for `CLAWDBOT_*` environment variables (logs a deprecation warning when used). `MOLTBOT_*` variables are **not** shimmed — this repo never shipped with MOLTBOT prefixes, so no existing deployments rely on them.
 
 4) Enable **Public Networking** (HTTP). Railway will assign a domain.
    - This service is configured to listen on port `8080` (including custom domains).
