@@ -49,7 +49,7 @@ Then:
 
 ## Support / community
 
-- GitHub Issues: https://github.com/vignesh07/openclaw-railway-template/issues
+- GitHub Issues: https://github.com/vignesh07/clawdbot-railway-template/issues
 - Discord: https://discord.com/invite/clawd
 
 If you’re filing a bug, please include the output of:
@@ -113,7 +113,7 @@ Recommendations:
 ## Local smoke test
 
 ```bash
-docker build -t openclaw-railway-template .
+docker build -t clawdbot-railway-template .
 
 docker run --rm -p 8080:8080 \
   -e PORT=8080 \
@@ -121,7 +121,7 @@ docker run --rm -p 8080:8080 \
   -e OPENCLAW_STATE_DIR=/data/.openclaw \
   -e OPENCLAW_WORKSPACE_DIR=/data/workspace \
   -v $(pwd)/.tmpdata:/data \
-  openclaw-railway-template
+  clawdbot-railway-template
 
 # open http://localhost:8080/setup (password: test)
 ```
