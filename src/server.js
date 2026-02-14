@@ -114,6 +114,9 @@ function isConfigured() {
 // One-time migration: rename legacy config files to openclaw.json so existing
 // deployments that still have the old filename on their volume keep working.
 (function migrateLegacyConfigFile() {
+  // If the operator explicitly chose a config path, do not rename files in STATE_DIR.
+  if (process.env.OPENCLAW_CONFIG_PATH?.trim()) return;
+
   const canonical = path.join(STATE_DIR, "openclaw.json");
   if (fs.existsSync(canonical)) return;
 
