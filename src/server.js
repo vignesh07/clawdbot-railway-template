@@ -302,6 +302,29 @@ app.use(express.json({ limit: "1mb" }));
 // Minimal health endpoint for Railway.
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
+async function probeGateway() {
+  // Don't assume HTTP — the gateway primarily speaks WebSocket.
+  // A simple TCP connect check is enough for "is it up".
+  const net = await import("node:net");
+
+  return await new Promise((resolve) => {
+    const sock = net.createConnection({
+      host: INTERNAL_GATEWAY_HOST,
+      port: INTERNAL_GATEWAY_PORT,
+      timeout: 750,
+    });
+
+    const done = (ok) => {
+      try { sock.destroy(); } catch {}
+      resolve(ok);
+    };
+
+    sock.on("connect", () => done(true));
+    sock.on("timeout", () => done(false));
+    sock.on("error", () => done(false));
+  });
+}
+
 // Public health endpoint (no auth) so Railway can probe without /setup.
 // Keep this free of secrets.
 app.get("/healthz", async (_req, res) => {
@@ -822,6 +845,14 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
     }
 
     // Apply changes immediately.
+    await restartGateway();
+
+    // Ensure OpenClaw applies any "configured but not enabled" channel/plugin changes.
+    // This makes Telegram/Discord pairing issues much less "silent".
+    const fix = await runCmd(OPENCLAW_NODE, clawArgs(["doctor", "--fix"]));
+    extra += `\n[doctor --fix] exit=${fix.code} (output ${fix.output.length} chars)\n${fix.output || "(no output)"}`;
+
+    // Doctor may require a restart depending on changes.
     await restartGateway();
   }
 
