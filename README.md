@@ -47,6 +47,15 @@ Then:
 - Complete setup
 - Visit `https://<your-app>.up.railway.app/` and `/openclaw`
 
+## Support / community
+
+- GitHub Issues: https://github.com/vignesh07/clawdbot-railway-template/issues
+- Discord: https://discord.com/invite/clawd
+
+If you’re filing a bug, please include the output of:
+- `/healthz`
+- `/setup/api/debug` (after authenticating to /setup)
+
 ## Getting chat tokens (so you don’t have to scramble)
 
 ### Telegram bot token
