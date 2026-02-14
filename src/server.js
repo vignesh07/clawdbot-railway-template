@@ -797,8 +797,13 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           clawArgs(["config", "set", "--json", "channels.telegram", JSON.stringify(cfgObj)]),
         );
         const get = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "channels.telegram"]));
+
+        // Best-effort: enable the telegram plugin explicitly (some builds require this even when configured).
+        const plug = await runCmd(OPENCLAW_NODE, clawArgs(["plugins", "enable", "telegram"]));
+
         extra += `\n[telegram config] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}`;
         extra += `\n[telegram verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`;
+        extra += `\n[telegram plugin enable] exit=${plug.code} (output ${plug.output.length} chars)\n${plug.output || "(no output)"}`;
       }
     }
 
@@ -907,14 +912,14 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       channels: {
         telegram: {
           exit: tg.code,
-          configuredEnabled: /enabled\s*[:=]\s*true/.test(tg.output || ""),
+          configuredEnabled: /"enabled"\s*:\s*true/.test(tg.output || "") || /enabled\s*[:=]\s*true/.test(tg.output || ""),
           botTokenPresent: /(\d{5,}:[A-Za-z0-9_-]{10,})/.test(tg.output || ""),
           output: tgOut,
         },
         discord: {
           exit: dc.code,
-          configuredEnabled: /enabled\s*[:=]\s*true/.test(dc.output || ""),
-          tokenPresent: /token\s*[:=]\s*\S+/.test(dc.output || ""),
+          configuredEnabled: /"enabled"\s*:\s*true/.test(dc.output || "") || /enabled\s*[:=]\s*true/.test(dc.output || ""),
+          tokenPresent: /"token"\s*:\s*"?\S+"?/.test(dc.output || "") || /token\s*[:=]\s*\S+/.test(dc.output || ""),
           output: dcOut,
         },
       },
@@ -1329,6 +1334,15 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
   console.log(`[wrapper] listening on :${PORT}`);
   console.log(`[wrapper] state dir: ${STATE_DIR}`);
   console.log(`[wrapper] workspace dir: ${WORKSPACE_DIR}`);
+
+  // Harden state dir for OpenClaw and avoid missing credentials dir on fresh volumes.
+  try {
+    fs.mkdirSync(path.join(STATE_DIR, "credentials"), { recursive: true });
+  } catch {}
+  try {
+    fs.chmodSync(STATE_DIR, 0o700);
+  } catch {}
+
   console.log(`[wrapper] gateway token: ${OPENCLAW_GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
   console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
   if (!SETUP_PASSWORD) {
