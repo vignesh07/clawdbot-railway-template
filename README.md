@@ -49,7 +49,7 @@ Then:
 
 ## Support / community
 
-- GitHub Issues: https://github.com/vignesh07/clawdbot-railway-template/issues
+- GitHub Issues: https://github.com/vignesh07/openclaw-railway-template/issues
 - Discord: https://discord.com/invite/clawd
 
 If you’re filing a bug, please include the output of:

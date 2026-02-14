@@ -5,7 +5,7 @@ Thanks for helping improve the OpenClaw Railway Template.
 ## Where to ask questions / get help
 
 - Discord: https://discord.com/invite/clawd
-- GitHub Issues: https://github.com/vignesh07/clawdbot-railway-template/issues
+- GitHub Issues: https://github.com/vignesh07/openclaw-railway-template/issues
 
 ## Reporting bugs
 
