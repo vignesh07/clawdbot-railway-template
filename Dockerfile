@@ -65,7 +65,9 @@ RUN npm install -g clawhub @tantanok221/agentbudget agent-browser @infisical/cli
 
 # Turso CLI (https://docs.turso.tech/cli/installation)
 RUN curl -sSfL https://get.tur.so/install.sh | bash \
-  && mv /root/.turso/bin/turso /usr/local/bin/turso
+  && test -f /root/.turso/turso \
+  && mv /root/.turso/turso /usr/local/bin/turso \
+  && chmod +x /usr/local/bin/turso
 
 # Homebrew on Linux (portable bootstrap without interactive installer)
 RUN git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew \
