@@ -70,11 +70,13 @@ RUN curl -sSfL https://get.tur.so/install.sh | bash \
   && chmod +x /usr/local/bin/turso
 
 # Homebrew on Linux (portable bootstrap without interactive installer)
-RUN git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew \
+RUN mkdir -p /home/linuxbrew/.linuxbrew \
+  && git clone --depth=1 https://github.com/Homebrew/brew /home/linuxbrew/.linuxbrew/Homebrew \
+  && ln -sfn /home/linuxbrew/.linuxbrew/Homebrew/Library /home/linuxbrew/.linuxbrew/Library \
   && mkdir -p /home/linuxbrew/.linuxbrew/bin \
-  && ln -sf ../Homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew \
-  && ln -sf /home/linuxbrew/.linuxbrew/bin/brew /usr/local/bin/brew \
-  && /usr/local/bin/brew --version
+  && ln -sfn /home/linuxbrew/.linuxbrew/Homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew \
+  && ln -sfn /home/linuxbrew/.linuxbrew/bin/brew /usr/local/bin/brew \
+  && HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew /usr/local/bin/brew --version
 
 # `openclaw update` expects pnpm. Provide it in the runtime image.
 RUN corepack enable && corepack prepare pnpm@10.23.0 --activate
