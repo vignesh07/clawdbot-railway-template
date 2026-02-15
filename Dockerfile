@@ -60,7 +60,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # Runtime CLI dependencies used by OpenClaw sessions.
-RUN npm install -g clawhub @tantanok221/agentbudget @vercel/agent-browser @infisical/cli \
+RUN npm install -g clawhub @tantanok221/agentbudget agent-browser @infisical/cli \
   && npm cache clean --force
 
 # Turso CLI (https://docs.turso.tech/cli/installation)
