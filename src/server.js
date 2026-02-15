@@ -54,6 +54,19 @@ const WORKSPACE_DIR =
   getEnvWithShim("OPENCLAW_WORKSPACE_DIR", "CLAWDBOT_WORKSPACE_DIR") ||
   path.join(STATE_DIR, "workspace");
 
+// Persist CLI auth/config across Railway restarts by placing config under /data volume.
+const GH_CONFIG_DIR = process.env.GH_CONFIG_DIR || path.join(STATE_DIR, "auth", "gh");
+const XDG_CONFIG_HOME =
+  process.env.XDG_CONFIG_HOME || path.join(STATE_DIR, "auth", "xdg");
+process.env.GH_CONFIG_DIR = GH_CONFIG_DIR;
+process.env.XDG_CONFIG_HOME = XDG_CONFIG_HOME;
+try {
+  fs.mkdirSync(GH_CONFIG_DIR, { recursive: true });
+  fs.mkdirSync(XDG_CONFIG_HOME, { recursive: true });
+} catch {
+  // best-effort
+}
+
 // Protect /setup with a user-provided password.
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
 

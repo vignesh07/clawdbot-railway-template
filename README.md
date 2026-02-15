@@ -9,6 +9,8 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
 - One-click **Export backup** (so users can migrate off Railway later)
 - **Import backup** from `/setup` (advanced recovery)
+- Runtime tooling preinstalled in image: `gh`, `clawhub`, `agentbudget`, `agent-browser`, `turso`, `brew`, `infisical`, `chromium` (survives container restarts/redeploys)
+- CLI auth config persisted to Railway volume (`/data/.openclaw/auth`) via `GH_CONFIG_DIR` and `XDG_CONFIG_HOME`
 
 ## How it works (high level)
 
