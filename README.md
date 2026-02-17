@@ -39,7 +39,7 @@ Notes:
 - This template pins OpenClaw to a released version by default via Docker build arg `OPENCLAW_GIT_REF` (override if you want `main`).
 
 4) Enable **Public Networking** (HTTP). Railway will assign a domain.
-   - This service is configured to listen on port `8080` (including custom domains).
+   - This service listens on Railway’s injected `PORT` at runtime (recommended).
 5) Deploy.
 
 Then:
@@ -99,7 +99,7 @@ Checklist:
 - Ensure you mounted a **Volume** at `/data` and set:
   - `OPENCLAW_STATE_DIR=/data/.openclaw`
   - `OPENCLAW_WORKSPACE_DIR=/data/workspace`
-- Ensure **Public Networking** is enabled and `PORT=8080`.
+- Ensure **Public Networking** is enabled (Railway will inject `PORT`).
 - Check Railway logs for the wrapper error: it will show `Gateway not ready:` with the reason.
 
 ### Build OOM (out of memory) on Railway

@@ -15,20 +15,17 @@ for (const suffix of ["PUBLIC_PORT", "STATE_DIR", "WORKSPACE_DIR", "GATEWAY_TOKE
   const newKey = `OPENCLAW_${suffix}`;
   if (process.env[oldKey] && !process.env[newKey]) {
     process.env[newKey] = process.env[oldKey];
-    console.warn(`[migration] Copied ${oldKey} → ${newKey}. Please rename this variable in your Railway settings.`);
+    // Best-effort compatibility shim for old Railway templates.
+    // Intentionally no warning: Railway templates can still set legacy keys and warnings are noisy.
   }
 }
 
-// Railway deployments sometimes inject PORT=3000 by default. We want the wrapper to
-// reliably listen on 8080 unless explicitly overridden.
+// Railway injects PORT at runtime and routes traffic to that port.
+// Do not force a different public port in the container image, or the service may
+// boot but the Railway domain will be routed to a different port.
 //
-// Prefer OPENCLAW_PUBLIC_PORT (set in the Dockerfile / template) over PORT.
-const PORT = Number.parseInt(
-  process.env.OPENCLAW_PUBLIC_PORT?.trim() ??
-    process.env.PORT ??
-    "8080",
-  10,
-);
+// OPENCLAW_PUBLIC_PORT is kept as an escape hatch for non-Railway deployments.
+const PORT = Number.parseInt(process.env.PORT ?? process.env.OPENCLAW_PUBLIC_PORT ?? "3000", 10);
 
 // State/workspace
 // OpenClaw defaults to ~/.openclaw.
