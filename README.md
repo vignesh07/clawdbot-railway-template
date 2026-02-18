@@ -115,15 +115,15 @@ Recommendations:
 ```bash
 docker build -t clawdbot-railway-template .
 
-docker run --rm -p 8080:8080 \
-  -e PORT=8080 \
+docker run --rm -p 3000:3000 \
+  -e PORT=3000 \
   -e SETUP_PASSWORD=test \
   -e OPENCLAW_STATE_DIR=/data/.openclaw \
   -e OPENCLAW_WORKSPACE_DIR=/data/workspace \
   -v $(pwd)/.tmpdata:/data \
   clawdbot-railway-template
 
-# open http://localhost:8080/setup (password: test)
+# open http://localhost:3000/setup (password: test)
 ```
 
 ---
