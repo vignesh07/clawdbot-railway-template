@@ -702,14 +702,16 @@ function runCmd(cmd, args, opts = {}) {
 
 app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   try {
-    const safeWrite = (msg) => {
-      try {
-        if (!res.writableEnded) res.write(String(msg) + "\n");
-      } catch {}
+    const respondJson = (status, body) => {
+      if (res.writableEnded || res.headersSent) return;
+      res.status(status).json(body);
     };
     if (isConfigured()) {
       await ensureGatewayRunning();
-      return res.json({ ok: true, output: "Already configured.\nUse Reset setup if you want to rerun onboarding.\n" });
+      return respondJson(200, {
+        ok: true,
+        output: "Already configured.\nUse Reset setup if you want to rerun onboarding.\n",
+      });
     }
 
     fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -721,10 +723,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
     try {
       onboardArgs = buildOnboardArgs(payload);
     } catch (err) {
-      return res.status(400).json({ ok: false, output: `Setup input error: ${String(err)}` });
+      return respondJson(400, { ok: false, output: `Setup input error: ${String(err)}` });
     }
 
-    safeWrite("[setup] running openclaw onboard...");
+    const prefix = "[setup] running openclaw onboard...\n";
     const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
 
   let extra = "";
@@ -871,13 +873,13 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
     await restartGateway();
   }
 
-  return res.status(ok ? 200 : 500).json({
+  return respondJson(ok ? 200 : 500, {
     ok,
-    output: `${onboard.output}${extra}`,
+    output: `${prefix}${onboard.output}${extra}`,
   });
   } catch (err) {
     console.error("[/setup/api/run] error:", err);
-    return res.status(500).json({ ok: false, output: `Internal error: ${String(err)}` });
+    return respondJson(500, { ok: false, output: `Internal error: ${String(err)}` });
   }
 });
 
