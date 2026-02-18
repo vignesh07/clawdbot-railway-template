@@ -66,10 +66,9 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"'
 
 COPY src ./src
 
-# The wrapper listens on this port.
-# IMPORTANT: Do not hardcode a public listen port here.
+# The wrapper listens on $PORT.
+# IMPORTANT: Do not set a default PORT here.
 # Railway injects PORT at runtime and routes traffic to that port.
 # If we force a different port, deployments can come up but the domain will route elsewhere.
-ENV PORT=8080
-EXPOSE 8080
+EXPOSE 3000
 CMD ["node", "src/server.js"]
