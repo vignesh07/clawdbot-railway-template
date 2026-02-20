@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { PNG } from "pngjs";
 import express from "express";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
@@ -1186,6 +1187,81 @@ app.post("/setup/api/whatsapp/accounts", requireSetupAuth, async (req, res) => {
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) });
   }
+});
+
+function asciiQrToPngBuffer(qrAscii, opts = {}) {
+  const scale = Math.max(1, Number(opts.scale || 4));
+  const margin = Math.max(0, Number(opts.margin || 4)); // in "modules"
+  const lines = String(qrAscii)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .filter((l) => l.length);
+
+  // Each character encodes 2 vertical pixels (top/bottom)
+  const charW = Math.max(...lines.map((l) => l.length));
+  const charH = lines.length;
+
+  const modulesW = charW;
+  const modulesH = charH * 2;
+
+  const W = (modulesW + margin * 2) * scale;
+  const H = (modulesH + margin * 2) * scale;
+
+  const png = new PNG({ width: W, height: H });
+
+  // fill white
+  png.data.fill(0xff);
+
+  function setPixel(x, y, black) {
+    const idx = (png.width * y + x) << 2;
+    const v = black ? 0x00 : 0xff;
+    png.data[idx + 0] = v;
+    png.data[idx + 1] = v;
+    png.data[idx + 2] = v;
+    png.data[idx + 3] = 0xff;
+  }
+
+  function paintModule(mx, my, black) {
+    const x0 = (mx + margin) * scale;
+    const y0 = (my + margin) * scale;
+    for (let y = 0; y < scale; y++) {
+      for (let x = 0; x < scale; x++) {
+        setPixel(x0 + x, y0 + y, black);
+      }
+    }
+  }
+
+  for (let row = 0; row < charH; row++) {
+    const line = lines[row].padEnd(charW, " ");
+    for (let col = 0; col < charW; col++) {
+      const ch = line[col];
+      const topBlack = ch === "█" || ch === "▀";
+      const botBlack = ch === "█" || ch === "▄";
+
+      paintModule(col, row * 2 + 0, topBlack);
+      paintModule(col, row * 2 + 1, botBlack);
+    }
+  }
+
+  return PNG.sync.write(png);
+}
+
+app.get("/setup/api/whatsapp/qr.png", requireSetupAuth, async (req, res) => {
+  const accountId = String(req.query.accountId || "").trim();
+  if (!accountId) return res.status(400).type("text/plain").send("accountId required\n");
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(accountId)) return res.status(400).type("text/plain").send("invalid accountId\n");
+
+  // 1) generate qrAscii (same logic as /setup/api/whatsapp/qr)
+  const qrAscii = await generateWhatsappQrAscii({ accountId });
+  if (!qrAscii) return res.status(500).type("text/plain").send("failed to get qr\n");
+
+  // 2) convert to png
+  const pngBuf = asciiQrToPngBuffer(qrAscii, { scale: 4, margin: 4 });
+
+  res.setHeader("Content-Type", "image/png");
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(200).send(pngBuf);
 });
 
 
