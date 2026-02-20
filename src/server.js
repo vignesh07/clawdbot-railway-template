@@ -18,6 +18,9 @@ for (const suffix of ["PUBLIC_PORT", "STATE_DIR", "WORKSPACE_DIR", "GATEWAY_TOKE
     // Best-effort compatibility shim for old Railway templates.
     // Intentionally no warning: Railway templates can still set legacy keys and warnings are noisy.
   }
+  // Avoid forwarding legacy variables into OpenClaw subprocesses.
+  // OpenClaw logs a warning when deprecated CLAWDBOT_* variables are present.
+  delete process.env[oldKey];
 }
 
 // Railway injects PORT at runtime and routes traffic to that port.

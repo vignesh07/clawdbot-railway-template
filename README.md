@@ -116,6 +116,11 @@ Fix:
   - `openclaw devices list`
   - `openclaw devices approve <requestId>`
 
+If `openclaw devices list` shows no pending request IDs:
+- Make sure you’re visiting the Control UI at `/openclaw` (or your native app) and letting it attempt to connect
+- Ensure your state dir is the Railway volume (recommended): `OPENCLAW_STATE_DIR=/data/.openclaw`
+- Check `/setup/api/debug` for the active state/workspace dirs + gateway readiness
+
 ### “unauthorized: gateway token mismatch”
 
 The Control UI connects using `gateway.remote.token` and the gateway validates `gateway.auth.token`.
@@ -134,6 +139,13 @@ Checklist:
   - `OPENCLAW_WORKSPACE_DIR=/data/workspace`
 - Ensure **Public Networking** is enabled (Railway will inject `PORT`).
 - Check Railway logs for the wrapper error: it will show `Gateway not ready:` with the reason.
+
+### Legacy CLAWDBOT_* env vars / multiple state directories
+
+If you see warnings about deprecated `CLAWDBOT_*` variables or state dir split-brain (e.g. `~/.openclaw` vs `/data/...`):
+- Use `OPENCLAW_*` variables only
+- Ensure `OPENCLAW_STATE_DIR=/data/.openclaw` and `OPENCLAW_WORKSPACE_DIR=/data/workspace`
+- Redeploy after fixing Railway Variables
 
 ### Build OOM (out of memory) on Railway
 
