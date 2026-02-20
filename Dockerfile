@@ -46,10 +46,14 @@ ENV NODE_ENV=production
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     tini \
     python3 \
     python3-venv \
   && rm -rf /var/lib/apt/lists/*
+
+# Install uv (Python package manager required by skills like nano-banana-pro)
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
 # `openclaw update` expects pnpm. Provide it in the runtime image.
 RUN corepack enable && corepack prepare pnpm@10.23.0 --activate
