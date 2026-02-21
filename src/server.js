@@ -1610,8 +1610,18 @@ async function generateWhatsappQrAscii({ accountId, timeoutMs = 30_000 }) {
       buf += chunk.toString("utf8");
 
       const qr = extractWhatsappQrAscii(buf);
-      if (qr) {
-        finish(() => resolve(qr));
+      if (qr && !done) {
+        done = true;
+
+        if (timer) clearTimeout(timer);
+
+        setTimeout(() => {
+          try {
+            proc.kill("SIGTERM");
+          } catch {}
+        }, 90_000);
+
+        return resolve(qr);
       }
     };
 
