@@ -1493,8 +1493,6 @@ function asciiQrToPngBuffer(qrAscii, opts = {}) {
     .map((l) => l.replace(/\s+$/g, ""))
     .filter((l) => l.length);
 
-  // if (lines.length && lines[lines.length - 1] === "") lines.pop();
-
   // Each character encodes 2 vertical pixels (top/bottom)
   const charW = Math.max(...lines.map((l) => l.length));
   const charH = lines.length;
