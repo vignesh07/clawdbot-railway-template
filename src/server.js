@@ -1193,19 +1193,19 @@ function asciiQrToPngBuffer(qrAscii, opts = {}) {
   const scale = Math.max(1, Number(opts.scale || 4));
   const margin = Math.max(0, Number(opts.margin || 4)); // in "modules"
   
-  // const lines = String(qrAscii)
-  // .replace(/\r\n/g, "\n")
-  // .replace(/\r/g, "\n")
-  // .split("\n")
-  // .map((l) => l.replace(/\s+$/g, ""))
-  // .filter((l) => l.length);
-
   const lines = String(qrAscii)
   .replace(/\r\n/g, "\n")
   .replace(/\r/g, "\n")
-  .split("\n");
+  .split("\n")
+  .map((l) => l.replace(/\s+$/g, ""))
+  .filter((l) => l.length);
 
-  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  // const lines = String(qrAscii)
+  // .replace(/\r\n/g, "\n")
+  // .replace(/\r/g, "\n")
+  // .split("\n");
+
+  // if (lines.length && lines[lines.length - 1] === "") lines.pop();
 
   // Each character encodes 2 vertical pixels (top/bottom)
   const charW = Math.max(...lines.map((l) => l.length));
