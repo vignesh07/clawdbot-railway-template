@@ -1,4 +1,6 @@
-# OpenClaw Railway Template (1‑click deploy)
+# OpenClaw Railway Template + Tailscale (1‑click deploy)
+
+**Fork of [vignesh07/clawdbot-railway-template](https://github.com/vignesh07/clawdbot-railway-template)** with built-in **Tailscale integration**.
 
 This repo packages **OpenClaw** for Railway with a small **/setup** web wizard so users can deploy and onboard **without running any commands**.
 
@@ -6,6 +8,7 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 
 - **OpenClaw Gateway + Control UI** (served at `/` and `/openclaw`)
 - A friendly **Setup Wizard** at `/setup` (protected by a password)
+- **Built-in Tailscale support** for private HTTPS dashboard access
 - Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
 - One-click **Export backup** (so users can migrate off Railway later)
 - **Import backup** from `/setup` (advanced recovery)
@@ -35,6 +38,10 @@ Recommended:
 Optional:
 - `OPENCLAW_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
 
+**For Tailscale (private access):**
+- `TAILSCALE_AUTHKEY` — Auth key from https://login.tailscale.com/admin/settings/keys (create a reusable key)
+- `TAILSCALE_HOSTNAME` — Optional hostname on your tailnet (default: `openclaw-railway`)
+
 Notes:
 - This template pins OpenClaw to a released version by default via Docker build arg `OPENCLAW_GIT_REF` (override if you want `main`).
 
@@ -46,6 +53,48 @@ Then:
 - Visit `https://<your-app>.up.railway.app/setup`
 - Complete setup
 - Visit `https://<your-app>.up.railway.app/` and `/openclaw`
+
+## Tailscale Setup (Private Dashboard Access)
+
+This template includes **built-in Tailscale support** so you can access your OpenClaw dashboard privately over your tailnet instead of the public Railway domain.
+
+### 1. Get a Tailscale auth key
+
+1. Go to https://login.tailscale.com/admin/settings/keys
+2. Create a new auth key:
+   - ✅ **Reusable** (allows reconnects on Railway restarts)
+   - ✅ **Ephemeral** (optional, auto-removes device when unused)
+   - Set expiry as needed (90 days recommended)
+3. Copy the auth key (starts with `tskey-auth-...`)
+
+### 2. Add Railway variables
+
+In your Railway project settings, add:
+- `TAILSCALE_AUTHKEY` = your auth key from step 1
+- `TAILSCALE_HOSTNAME` = `openclaw-railway` (or whatever you prefer)
+
+### 3. Redeploy and configure OpenClaw
+
+After redeployment:
+1. Check Railway logs — you should see `[tailscale] Running. IP: 100.x.x.x`
+2. Configure OpenClaw to enable Tailscale Serve mode via the `/setup` wizard:
+   ```json
+   {
+     "gateway": {
+       "tailscale": {
+         "mode": "serve"
+       }
+     }
+   }
+   ```
+3. Access your dashboard at `https://openclaw-railway.<your-tailnet>.ts.net/`
+
+### 4. Remove public access (optional)
+
+Once Tailscale is working:
+- Remove the Railway public domain (Settings → Networking → Public Domain → Remove)
+- Discord and other chat services will continue working (they use outbound connections)
+- Only you can access the dashboard via your tailnet
 
 ## Support / community
 

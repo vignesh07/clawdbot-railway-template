@@ -49,7 +49,10 @@ RUN apt-get update \
     tini \
     python3 \
     python3-venv \
-  && rm -rf /var/lib/apt/lists/*
+    curl \
+    iptables \
+  && rm -rf /var/lib/apt/lists/* \
+  && curl -fsSL https://tailscale.com/install.sh | sh
 
 # `openclaw update` expects pnpm. Provide it in the runtime image.
 RUN corepack enable && corepack prepare pnpm@10.23.0 --activate
@@ -77,6 +80,8 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"'
   && chmod +x /usr/local/bin/openclaw
 
 COPY src ./src
+COPY start.sh ./start.sh
+RUN chmod +x ./start.sh
 
 # The wrapper listens on $PORT.
 # IMPORTANT: Do not set a default PORT here.
@@ -86,4 +91,4 @@ EXPOSE 8080
 
 # Ensure PID 1 reaps zombies and forwards signals.
 ENTRYPOINT ["tini", "--"]
-CMD ["node", "src/server.js"]
+CMD ["./start.sh"]
