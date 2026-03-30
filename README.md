@@ -9,6 +9,7 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
 - One-click **Export backup** (so users can migrate off Railway later)
 - **Import backup** from `/setup` (advanced recovery)
+- **Optional Tailscale** — join your private tailnet by setting `TS_AUTHKEY` (see [Tailscale](#tailscale-optional))
 
 ## How it works (high level)
 
@@ -34,6 +35,8 @@ Recommended:
 
 Optional:
 - `OPENCLAW_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
+- `TS_AUTHKEY` — Tailscale reusable auth key; enables tailnet integration (see [Tailscale](#tailscale-optional)).
+- `TS_HOSTNAME` — Tailscale node name (default: `openclaw-railway`).
 
 Notes:
 - This template pins OpenClaw to a released version by default via Docker build arg `OPENCLAW_GIT_REF` (override if you want `main`).
@@ -104,6 +107,10 @@ python3 -m venv /data/venv || true
 # Example: ensure npm/pnpm dirs exist
 mkdir -p /data/npm /data/npm-cache /data/pnpm /data/pnpm-store
 ```
+
+## Tailscale (optional)
+
+Set `TS_AUTHKEY` (reusable, non-ephemeral key from https://login.tailscale.com/admin/settings/keys) to join the container to your tailnet on boot. Tailscale runs in userspace-networking mode — no `--privileged` or kernel modules required. State persists to `/data/tailscale` so the node identity survives redeploys. MagicDNS and Tailscale SSH (`tailscale ssh openclaw-railway`) are enabled automatically.
 
 ## Troubleshooting
 

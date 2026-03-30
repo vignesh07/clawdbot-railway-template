@@ -46,9 +46,16 @@ ENV NODE_ENV=production
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     tini \
     python3 \
     python3-venv \
+  && curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg \
+    | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null \
+  && curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list \
+    | tee /etc/apt/sources.list.d/tailscale.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends tailscale \
   && rm -rf /var/lib/apt/lists/*
 
 # `openclaw update` expects pnpm. Provide it in the runtime image.
@@ -77,6 +84,7 @@ RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"'
   && chmod +x /usr/local/bin/openclaw
 
 COPY src ./src
+RUN chmod +x /app/src/tailscale-entrypoint.sh
 
 # The wrapper listens on $PORT.
 # IMPORTANT: Do not set a default PORT here.
@@ -85,5 +93,5 @@ COPY src ./src
 EXPOSE 8080
 
 # Ensure PID 1 reaps zombies and forwards signals.
-ENTRYPOINT ["tini", "--"]
+ENTRYPOINT ["tini", "--", "/app/src/tailscale-entrypoint.sh"]
 CMD ["node", "src/server.js"]
