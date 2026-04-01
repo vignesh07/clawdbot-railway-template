@@ -9,3 +9,15 @@ test("server exposes /healthz endpoint", () => {
   const src = fs.readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   assert.match(src, /app\.get\("\/healthz"/);
 });
+
+test("healthz returns 503 when configured gateway is unreachable", () => {
+  const src = fs.readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  assert.match(src, /const healthy = !configured \|\| gatewayReachable/);
+  assert.match(src, /res\.status\(healthy \? 200 : 503\)\.json\(/);
+});
+
+test("healthz can schedule gateway restart when unreachable", () => {
+  const src = fs.readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  assert.match(src, /scheduleGatewayRestart\("healthcheck-unreachable"\)/);
+  assert.match(src, /restartScheduled: Boolean\(gatewayRestartTimer\)/);
+});
