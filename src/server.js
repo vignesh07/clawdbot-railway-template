@@ -1449,6 +1449,34 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
   // Auto-start the gateway if already configured so polling channels (Telegram/Discord/etc.)
   // work even if nobody visits the web UI.
   if (isConfigured()) {
+    // --- Tailscale sidecar (optional, activated by TS_AUTHKEY) ---
+    if (process.env.TS_AUTHKEY) {
+      try {
+        childProcess.spawn("tailscaled", ["--tun=userspace-networking", "--statedir=/data/tailscale"], { stdio: "ignore" });
+        await new Promise(r => setTimeout(r, 3000));
+        await runCmd("tailscale", ["up", "--authkey=" + process.env.TS_AUTHKEY, "--hostname=" + (process.env.TS_HOSTNAME || "openclaw-railway")]);
+        await runCmd("tailscale", ["serve", "--bg", "--https=443", `http://127.0.0.1:${INTERNAL_GATEWAY_PORT}`]);
+        const ts = JSON.parse((await runCmd("tailscale", ["status", "--json"])).output);
+        const dns = (ts?.Self?.DNSName || "").replace(/\.$/, "");
+        if (dns) {
+          await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.allowTailscale", "true"]));
+          console.log(`[wrapper] Tailscale up: https://${dns}`);
+        }
+      } catch (err) { console.warn(`[wrapper] Tailscale failed: ${err}`); }
+    }
+
+    // --- Sync allowedOrigins for Control UI WebSocket connections ---
+    {
+      const origins = [`http://localhost:${INTERNAL_GATEWAY_PORT}`, `http://127.0.0.1:${INTERNAL_GATEWAY_PORT}`];
+      if (process.env.RAILWAY_PUBLIC_DOMAIN) origins.push(`https://${process.env.RAILWAY_PUBLIC_DOMAIN}`);
+      try {
+        const ts = JSON.parse((await runCmd("tailscale", ["status", "--json"])).output);
+        const dns = (ts?.Self?.DNSName || "").replace(/\.$/, "");
+        if (dns) origins.push(`https://${dns}`);
+      } catch {}
+      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.controlUi.allowedOrigins", JSON.stringify(origins)])).catch(() => {});
+    }
+
     console.log("[wrapper] config detected; starting gateway...");
     try {
       await ensureGatewayRunning();
