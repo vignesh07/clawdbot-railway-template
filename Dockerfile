@@ -85,8 +85,6 @@ COPY --from=clawdbot-build /clawdbot /clawdbot
 # Provide an openclaw executable
 RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /clawdbot/dist/entry.js "$@"' > /usr/local/bin/openclaw \
   && chmod +x /usr/local/bin/openclaw
-# Pre-install the Chrome browser relay extension so it persists across restarts
-RUN openclaw browser extension install
 
 COPY src ./src
 
