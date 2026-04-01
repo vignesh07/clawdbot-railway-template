@@ -15,6 +15,10 @@
   "dependencies": {
     "express": "^5.1.0",
     "http-proxy": "^1.18.1",
-    "tar": "^7.5.4"
+    "tar": "^7.5.4",
+    "openclaw": "2026.3.31"
+  },
+  "overrides": {
+  "axios": "1.14.2"
   }
 }
