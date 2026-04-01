@@ -10,16 +10,16 @@ import * as tar from "tar";
 
 // Railway commonly sets PORT=8080 for HTTP services.
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
-const STATE_DIR = process.env.CLAWDBOT_STATE_DIR?.trim() || process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
-const WORKSPACE_DIR = process.env.CLAWDBOT_WORKSPACE_DIR?.trim() || process.env.OPENCLAW_WORKSPACE_DIR?.trim() || path.join(STATE_DIR, "workspace");
+const STATE_DIR = process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
+const WORKSPACE_DIR = process.env.OPENCLAW_WORKSPACE_DIR?.trim() || process.env.CLAWDBOT_WORKSPACE_DIR?.trim() || path.join(STATE_DIR, "workspace");
 
 // Protect /setup with a user-provided password.
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
 
-// Gateway admin token (protects Clawdbot gateway + Control UI).
+// Gateway admin token (protects OpenClaw gateway + Control UI).
 // Must be stable across restarts. If not provided via env, persist it in the state dir.
 function resolveGatewayToken() {
-  const envTok = process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() || process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  const envTok = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
   if (envTok) return envTok;
 
   const tokenPath = path.join(STATE_DIR, "gateway.token");
@@ -40,8 +40,9 @@ function resolveGatewayToken() {
   return generated;
 }
 
-const CLAWDBOT_GATEWAY_TOKEN = resolveGatewayToken();
-process.env.CLAWDBOT_GATEWAY_TOKEN = CLAWDBOT_GATEWAY_TOKEN;
+const GATEWAY_TOKEN = resolveGatewayToken();
+process.env.OPENCLAW_GATEWAY_TOKEN = GATEWAY_TOKEN;
+process.env.CLAWDBOT_GATEWAY_TOKEN = GATEWAY_TOKEN;
 
 // Where the gateway will listen internally (we proxy to it).
 const INTERNAL_GATEWAY_PORT = Number.parseInt(process.env.INTERNAL_GATEWAY_PORT ?? "18789", 10);
@@ -49,15 +50,15 @@ const INTERNAL_GATEWAY_HOST = process.env.INTERNAL_GATEWAY_HOST ?? "127.0.0.1";
 const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`;
 
 // Always run the built-from-source CLI entry directly to avoid PATH/global-install mismatches.
-const CLAWDBOT_ENTRY = process.env.CLAWDBOT_ENTRY?.trim() || "/clawdbot/dist/entry.js";
-const CLAWDBOT_NODE = process.env.CLAWDBOT_NODE?.trim() || "node";
+const OPENCLAW_ENTRY = process.env.OPENCLAW_ENTRY?.trim() || process.env.CLAWDBOT_ENTRY?.trim() || "/clawdbot/dist/entry.js";
+const OPENCLAW_NODE = process.env.OPENCLAW_NODE?.trim() || process.env.OPENCLAW_NODE?.trim() || "node";
 
 function clawArgs(args) {
-  return [CLAWDBOT_ENTRY, ...args];
+  return [OPENCLAW_ENTRY, ...args];
 }
 
 function configPath() {
-  const explicit = process.env.CLAWDBOT_CONFIG_PATH?.trim() || process.env.OPENCLAW_CONFIG_PATH?.trim();
+  const explicit = process.env.OPENCLAW_CONFIG_PATH?.trim() || process.env.CLAWDBOT_CONFIG_PATH?.trim();
   if (explicit) return explicit;
   // OpenClaw ≥2026.2.10 writes openclaw.json; older versions wrote clawdbot.json.
   const openclawPath = path.join(STATE_DIR, "openclaw.json");
@@ -115,17 +116,17 @@ async function startGateway() {
     "--auth",
     "token",
     "--token",
-    CLAWDBOT_GATEWAY_TOKEN,
+    GATEWAY_TOKEN,
   ];
 
-  gatewayProc = childProcess.spawn(CLAWDBOT_NODE, clawArgs(args), {
+  gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
     stdio: "inherit",
     env: {
       ...process.env,
+      OPENCLAW_STATE_DIR: STATE_DIR,
       CLAWDBOT_STATE_DIR: STATE_DIR,
-        OPENCLAW_STATE_DIR: STATE_DIR,
+      OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
       CLAWDBOT_WORKSPACE_DIR: WORKSPACE_DIR,
-        OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
     },
   });
 
@@ -183,14 +184,14 @@ function requireSetupAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
   if (scheme !== "Basic" || !encoded) {
-    res.set("WWW-Authenticate", 'Basic realm="Clawdbot Setup"');
+    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
     return res.status(401).send("Auth required");
   }
   const decoded = Buffer.from(encoded, "base64").toString("utf8");
   const idx = decoded.indexOf(":");
   const password = idx >= 0 ? decoded.slice(idx + 1) : "";
   if (password !== SETUP_PASSWORD) {
-    res.set("WWW-Authenticate", 'Basic realm="Clawdbot Setup"');
+    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
     return res.status(401).send("Invalid password");
   }
   return next();
@@ -216,7 +217,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Clawdbot Setup</title>
+  <title>OpenClaw Setup</title>
   <style>
     body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 2rem; max-width: 900px; }
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 1.25rem; margin: 1rem 0; }
@@ -228,14 +229,14 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
   </style>
 </head>
 <body>
-  <h1>Clawdbot Setup</h1>
-  <p class="muted">This wizard configures Clawdbot by running the same onboarding command it uses in the terminal, but from the browser.</p>
+  <h1>OpenClaw Setup</h1>
+  <p class="muted">This wizard configures OpenClaw by running the same onboarding command it uses in the terminal, but from the browser.</p>
 
   <div class="card">
     <h2>Status</h2>
     <div id="status">Loading...</div>
     <div style="margin-top: 0.75rem">
-      <a href="/clawdbot" target="_blank">Open Clawdbot UI</a>
+      <a href="/clawdbot" target="_blank">Open OpenClaw UI</a>
       &nbsp;|&nbsp;
       <a href="/setup/export" target="_blank">Download backup (.tar.gz)</a>
     </div>
@@ -263,7 +264,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
 
   <div class="card">
     <h2>2) Optional: Channels</h2>
-    <p class="muted">You can also add channels later inside Clawdbot, but this helps you get messaging working immediately.</p>
+    <p class="muted">You can also add channels later inside OpenClaw, but this helps you get messaging working immediately.</p>
 
     <label>Telegram bot token (optional)</label>
     <input id="telegramToken" type="password" placeholder="123456:ABC..." />
@@ -291,7 +292,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
     <button id="pairingApprove" style="background:#1f2937; margin-left:0.5rem">Approve pairing</button>
     <button id="reset" style="background:#444; margin-left:0.5rem">Reset setup</button>
     <pre id="log" style="white-space:pre-wrap"></pre>
-    <p class="muted">Reset deletes the Clawdbot config file so you can rerun onboarding. Pairing approval lets you grant DM access when dmPolicy=pairing.</p>
+    <p class="muted">Reset deletes the OpenClaw config file so you can rerun onboarding. Pairing approval lets you grant DM access when dmPolicy=pairing.</p>
   </div>
 
   <script src="/setup/app.js"></script>
@@ -300,10 +301,10 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
 });
 
 app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
-  const version = await runCmd(CLAWDBOT_NODE, clawArgs(["--version"]));
-  const channelsHelp = await runCmd(CLAWDBOT_NODE, clawArgs(["channels", "add", "--help"]));
+  const version = await runCmd(OPENCLAW_NODE, clawArgs(["--version"]));
+  const channelsHelp = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
 
-  // We reuse Clawdbot's own auth-choice grouping logic indirectly by hardcoding the same group defs.
+  // We reuse OpenClaw's own auth-choice grouping logic indirectly by hardcoding the same group defs.
   // This is intentionally minimal; later we can parse the CLI help output to stay perfectly in sync.
   const authGroups = [
     { value: "openai", label: "OpenAI", hint: "Codex OAuth + API key", options: [
@@ -356,7 +357,7 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
   res.json({
     configured: isConfigured(),
     gatewayTarget: GATEWAY_TARGET,
-    clawdbotVersion: version.output.trim(),
+    openclawVersion: version.output.trim(),
     channelsAddHelp: channelsHelp.output,
     authGroups,
   });
@@ -380,7 +381,7 @@ function buildOnboardArgs(payload) {
     "--gateway-auth",
     "token",
     "--gateway-token",
-    CLAWDBOT_GATEWAY_TOKEN,
+    GATEWAY_TOKEN,
     "--flow",
     payload.flow || "quickstart"
   ];
@@ -456,7 +457,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
   const payload = req.body || {};
   const onboardArgs = buildOnboardArgs(payload);
-  const onboard = await runCmd(CLAWDBOT_NODE, clawArgs(onboardArgs));
+  const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
 
   let extra = "";
 
@@ -466,19 +467,19 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   if (ok) {
     // Ensure gateway token is written into config so the browser UI can authenticate reliably.
     // (We also enforce loopback bind since the wrapper proxies externally.)
-    await runCmd(CLAWDBOT_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
-    await runCmd(CLAWDBOT_NODE, clawArgs(["config", "set", "gateway.auth.token", CLAWDBOT_GATEWAY_TOKEN]));
-    await runCmd(CLAWDBOT_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
-    await runCmd(CLAWDBOT_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", GATEWAY_TOKEN]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
 
-    const channelsHelp = await runCmd(CLAWDBOT_NODE, clawArgs(["channels", "add", "--help"]));
+    const channelsHelp = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
     const helpText = channelsHelp.output || "";
 
     const supports = (name) => helpText.includes(name);
 
     if (payload.telegramToken?.trim()) {
       if (!supports("telegram")) {
-        extra += "\n[telegram] skipped (this clawdbot build does not list telegram in `channels add --help`)\n";
+        extra += "\n[telegram] skipped (this openclaw build does not list telegram in `channels add --help`)\n";
       } else {
         // Avoid `channels add` here (it has proven flaky across builds); write config directly.
         const token = payload.telegramToken.trim();
@@ -490,10 +491,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           streamMode: "partial",
         };
         const set = await runCmd(
-          CLAWDBOT_NODE,
+          OPENCLAW_NODE,
           clawArgs(["config", "set", "--json", "channels.telegram", JSON.stringify(cfgObj)]),
         );
-        const get = await runCmd(CLAWDBOT_NODE, clawArgs(["config", "get", "channels.telegram"]));
+        const get = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "channels.telegram"]));
         extra += `\n[telegram config] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}`;
         extra += `\n[telegram verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`;
       }
@@ -501,7 +502,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
     if (payload.discordToken?.trim()) {
       if (!supports("discord")) {
-        extra += "\n[discord] skipped (this clawdbot build does not list discord in `channels add --help`)\n";
+        extra += "\n[discord] skipped (this openclaw build does not list discord in `channels add --help`)\n";
       } else {
         const token = payload.discordToken.trim();
         const cfgObj = {
@@ -513,10 +514,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           },
         };
         const set = await runCmd(
-          CLAWDBOT_NODE,
+          OPENCLAW_NODE,
           clawArgs(["config", "set", "--json", "channels.discord", JSON.stringify(cfgObj)]),
         );
-        const get = await runCmd(CLAWDBOT_NODE, clawArgs(["config", "get", "channels.discord"]));
+        const get = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "channels.discord"]));
         extra += `\n[discord config] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}`;
         extra += `\n[discord verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`;
       }
@@ -524,7 +525,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
     if (payload.slackBotToken?.trim() || payload.slackAppToken?.trim()) {
       if (!supports("slack")) {
-        extra += "\n[slack] skipped (this clawdbot build does not list slack in `channels add --help`)\n";
+        extra += "\n[slack] skipped (this openclaw build does not list slack in `channels add --help`)\n";
       } else {
         const cfgObj = {
           enabled: true,
@@ -532,10 +533,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           appToken: payload.slackAppToken?.trim() || undefined,
         };
         const set = await runCmd(
-          CLAWDBOT_NODE,
+          OPENCLAW_NODE,
           clawArgs(["config", "set", "--json", "channels.slack", JSON.stringify(cfgObj)]),
         );
-        const get = await runCmd(CLAWDBOT_NODE, clawArgs(["config", "get", "channels.slack"]));
+        const get = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "channels.slack"]));
         extra += `\n[slack config] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}`;
         extra += `\n[slack verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`;
       }
@@ -556,8 +557,8 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 });
 
 app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
-  const v = await runCmd(CLAWDBOT_NODE, clawArgs(["--version"]));
-  const help = await runCmd(CLAWDBOT_NODE, clawArgs(["channels", "add", "--help"]));
+  const v = await runCmd(OPENCLAW_NODE, clawArgs(["--version"]));
+  const help = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
   res.json({
     wrapper: {
       node: process.version,
@@ -565,13 +566,13 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       stateDir: STATE_DIR,
       workspaceDir: WORKSPACE_DIR,
       configPath: configPath(),
-      gatewayTokenFromEnv: Boolean(process.env.CLAWDBOT_GATEWAY_TOKEN?.trim()),
+      gatewayTokenFromEnv: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim()),
       gatewayTokenPersisted: fs.existsSync(path.join(STATE_DIR, "gateway.token")),
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
     },
-    clawdbot: {
-      entry: CLAWDBOT_ENTRY,
-      node: CLAWDBOT_NODE,
+    openclaw: {
+      entry: OPENCLAW_ENTRY,
+      node: OPENCLAW_NODE,
       version: v.output.trim(),
       channelsAddHelpIncludesTelegram: help.output.includes("telegram"),
     },
@@ -583,7 +584,7 @@ app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
   if (!channel || !code) {
     return res.status(400).json({ ok: false, error: "Missing channel or code" });
   }
-  const r = await runCmd(CLAWDBOT_NODE, clawArgs(["pairing", "approve", String(channel), String(code)]));
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "approve", String(channel), String(code)]));
   return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: r.output });
 });
 
@@ -605,11 +606,11 @@ app.get("/setup/export", requireSetupAuth, async (_req, res) => {
   res.setHeader("content-type", "application/gzip");
   res.setHeader(
     "content-disposition",
-    `attachment; filename="clawdbot-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz"`,
+    `attachment; filename="openclaw-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz"`,
   );
 
   // Prefer exporting from a common /data root so archives are easy to inspect and restore.
-  // This preserves dotfiles like /data/.clawdbot/clawdbot.json.
+  // This preserves dotfiles like /data/.openclaw/openclaw.json.
   const stateAbs = path.resolve(STATE_DIR);
   const workspaceAbs = path.resolve(WORKSPACE_DIR);
 
@@ -621,7 +622,7 @@ app.get("/setup/export", requireSetupAuth, async (_req, res) => {
 
   if (underData(stateAbs) && underData(workspaceAbs)) {
     cwd = dataRoot;
-    // We export relative to /data so the archive contains: .clawdbot/... and workspace/...
+    // We export relative to /data so the archive contains: .openclaw/... and workspace/...
     paths = [
       path.relative(dataRoot, stateAbs) || ".",
       path.relative(dataRoot, workspaceAbs) || ".",
@@ -680,7 +681,7 @@ const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`[wrapper] listening on :${PORT}`);
   console.log(`[wrapper] state dir: ${STATE_DIR}`);
   console.log(`[wrapper] workspace dir: ${WORKSPACE_DIR}`);
-  console.log(`[wrapper] gateway token: ${CLAWDBOT_GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
+  console.log(`[wrapper] gateway token: ${GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
   console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
   if (!SETUP_PASSWORD) {
     console.warn("[wrapper] WARNING: SETUP_PASSWORD is not set; /setup will error.");

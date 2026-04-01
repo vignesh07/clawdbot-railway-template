@@ -1,12 +1,12 @@
-# Clawdbot Railway Template (1‑click deploy)
+# OpenClaw Railway Template (1-click deploy)
 
 Eric's version
 
-This repo packages **Clawdbot** for Railway with a small **/setup** web wizard so users can deploy and onboard **without running any commands**.
+This repo packages **OpenClaw** for Railway with a small **/setup** web wizard so users can deploy and onboard **without running any commands**.
 
 ## What you get
 
-- **Clawdbot Gateway + Control UI** (served at `/` and `/clawdbot`)
+- **OpenClaw Gateway + Control UI** (served at `/` and `/clawdbot`)
 - A friendly **Setup Wizard** at `/setup` (protected by a password)
 - Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
 - One-click **Export backup** (so users can migrate off Railway later)
@@ -15,10 +15,10 @@ This repo packages **Clawdbot** for Railway with a small **/setup** web wizard s
 
 - The container runs a wrapper web server.
 - The wrapper protects `/setup` with `SETUP_PASSWORD`.
-- During setup, the wrapper runs `clawdbot onboard --non-interactive ...` inside the container, writes state to the volume, and then starts the gateway.
-- After setup, **`/` is Clawdbot**. The wrapper reverse-proxies all traffic (including WebSockets) to the local gateway process.
+- During setup, the wrapper runs `openclaw onboard --non-interactive ...` inside the container, writes state to the volume, and then starts the gateway.
+- After setup, **`/` is OpenClaw**. The wrapper reverse-proxies all traffic (including WebSockets) to the local gateway process.
 
-## Railway deploy instructions (what you’ll publish as a Template)
+## Railway deploy instructions (what you'll publish as a Template)
 
 In Railway Template Composer:
 
@@ -30,14 +30,14 @@ Required:
 - `SETUP_PASSWORD` — user-provided password to access `/setup`
 
 Recommended:
-- `CLAWDBOT_STATE_DIR=/data/.clawdbot`
-- `CLAWDBOT_WORKSPACE_DIR=/data/workspace`
+- `OPENCLAW_STATE_DIR=/data/.openclaw`
+- `OPENCLAW_WORKSPACE_DIR=/data/workspace`
 
 Optional:
-- `CLAWDBOT_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
+- `OPENCLAW_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
 
 Notes:
-- This template pins Clawdbot to a known-good version by default via Docker build arg `CLAWDBOT_VERSION`.
+- This template pins OpenClaw to a known-good version by default via Docker build arg `OPENCLAW_GIT_REF`.
 
 4) Enable **Public Networking** (HTTP). Railway will assign a domain.
 5) Deploy.
@@ -47,7 +47,7 @@ Then:
 - Complete setup
 - Visit `https://<your-app>.up.railway.app/` and `/clawdbot`
 
-## Getting chat tokens (so you don’t have to scramble)
+## Getting chat tokens (so you don't have to scramble)
 
 ### Telegram bot token
 1) Open Telegram and message **@BotFather**
@@ -65,15 +65,15 @@ Then:
 ## Local smoke test
 
 ```bash
-docker build -t clawdbot-railway-template .
+docker build -t openclaw-railway-template .
 
 docker run --rm -p 8080:8080 \
   -e PORT=8080 \
   -e SETUP_PASSWORD=test \
-  -e CLAWDBOT_STATE_DIR=/data/.clawdbot \
-  -e CLAWDBOT_WORKSPACE_DIR=/data/workspace \
+  -e OPENCLAW_STATE_DIR=/data/.openclaw \
+  -e OPENCLAW_WORKSPACE_DIR=/data/workspace \
   -v $(pwd)/.tmpdata:/data \
-  clawdbot-railway-template
+  openclaw-railway-template
 
 # open http://localhost:8080/setup (password: test)
 ```

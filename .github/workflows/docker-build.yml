@@ -23,6 +23,6 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
-          tags: clawdbot-railway-template:ci
+          tags: openclaw-railway-template:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
