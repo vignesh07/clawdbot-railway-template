@@ -122,22 +122,42 @@ async function syncAllowedOrigins() {
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.controlUi.allowedOrigins", JSON.stringify(origins)])).catch(() => {});
 }
 
+function debugPrefix(value) {
+  const text = String(value || "").trim();
+  if (!text) return "(missing)";
+  return `${text.slice(0, 10)}... (len=${text.length})`;
+}
+
+function debugSnippet(text, max = 400) {
+  const cleaned = String(text || "").trim();
+  if (!cleaned) return "(no output)";
+  return cleaned.length > max ? `${cleaned.slice(0, max)}...` : cleaned;
+}
+
 let tailscaleUpDone = false;
 let tailscaleServeDone = false;
 
 async function ensureTailscaleBoot() {
-  if (!process.env.TS_AUTHKEY) return { ok: false, reason: "TS_AUTHKEY not set" };
+  if (!process.env.TS_AUTHKEY) {
+    console.log("[wrapper] Tailscale bootstrap skipped: TS_AUTHKEY not set");
+    return { ok: false, reason: "TS_AUTHKEY not set" };
+  }
   if (tailscaleUpDone) return { ok: true };
 
   try {
+    const hostname = process.env.TS_HOSTNAME?.trim() || "openclaw-railway";
+    console.log(`[wrapper] Tailscale bootstrap: auth=${debugPrefix(process.env.TS_AUTHKEY)} hostname=${debugPrefix(hostname)}`);
     childProcess.spawn("tailscaled", ["--tun=userspace-networking", "--statedir=/data/tailscale"], { stdio: "ignore" });
     await sleep(3000);
 
-    const hostname = process.env.TS_HOSTNAME?.trim() || "openclaw-railway";
     const up = await runCmd("tailscale", ["up", `--authkey=${process.env.TS_AUTHKEY}`, `--hostname=${hostname}`]);
+    console.log(`[wrapper] tailscale up exit=${up.code} output=${debugSnippet(up.output)}`);
     if (up.code !== 0) {
-      throw new Error(`tailscale up failed (code=${up.code})`);
+      throw new Error(`tailscale up failed (code=${up.code}): ${debugSnippet(up.output)}`);
     }
+
+    const status = await runCmd("tailscale", ["status", "--json"]);
+    console.log(`[wrapper] tailscale status exit=${status.code} output=${debugSnippet(status.output)}`);
 
     tailscaleUpDone = true;
     console.log(`[wrapper] Tailscale authenticated (hostname=${hostname})`);
@@ -157,11 +177,14 @@ async function ensureTailscaleServe() {
 
   try {
     const serve = await runCmd("tailscale", ["serve", "--bg", "--https=443", `http://127.0.0.1:${INTERNAL_GATEWAY_PORT}`]);
+    console.log(`[wrapper] tailscale serve exit=${serve.code} output=${debugSnippet(serve.output)}`);
     if (serve.code !== 0) {
-      throw new Error(`tailscale serve failed (code=${serve.code})`);
+      throw new Error(`tailscale serve failed (code=${serve.code}): ${debugSnippet(serve.output)}`);
     }
 
-    const ts = JSON.parse((await runCmd("tailscale", ["status", "--json"])).output);
+    const status = await runCmd("tailscale", ["status", "--json"]);
+    console.log(`[wrapper] tailscale status after serve exit=${status.code} output=${debugSnippet(status.output)}`);
+    const ts = JSON.parse(status.output);
     const dns = (ts?.Self?.DNSName || "").replace(/\.$/, "");
     if (dns && isConfigured()) {
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.allowTailscale", "true"]));
@@ -1476,6 +1499,8 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
 
   console.log(`[wrapper] gateway token: ${OPENCLAW_GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
   console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
+  console.log(`[wrapper] TS_AUTHKEY: ${debugPrefix(process.env.TS_AUTHKEY)}`);
+  console.log(`[wrapper] TS_HOSTNAME: ${debugPrefix(process.env.TS_HOSTNAME)}`);
   if (!SETUP_PASSWORD) {
     console.warn("[wrapper] WARNING: SETUP_PASSWORD is not set; /setup will error.");
   }
