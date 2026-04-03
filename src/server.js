@@ -117,7 +117,16 @@ async function syncAllowedOrigins() {
   try {
     const ts = JSON.parse((await runCmd("tailscale", ["status", "--json"])).output);
     const dns = (ts?.Self?.DNSName || "").replace(/\.$/, "");
-    if (dns) origins.push(`https://${dns}`);
+    if (dns) {
+      origins.push(`https://${dns}`);
+      // Short hostname (e.g. "athena-1" from "athena-1.marlin-mirach.ts.net")
+      const shortName = dns.split(".")[0];
+      if (shortName) origins.push(`https://${shortName}`);
+    }
+    // Tailscale IP addresses (IPv4 and IPv6)
+    for (const ip of ts?.Self?.TailscaleIPs || []) {
+      origins.push(ip.includes(":") ? `https://[${ip}]` : `https://${ip}`);
+    }
   } catch {}
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.controlUi.allowedOrigins", JSON.stringify(origins)])).catch(() => {});
 }
