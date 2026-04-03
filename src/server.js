@@ -118,19 +118,18 @@ async function syncAllowedOrigins() {
     const ts = JSON.parse((await runCmd("tailscale", ["status", "--json"])).output);
     const dns = (ts?.Self?.DNSName || "").replace(/\.$/, "");
     if (dns) {
+      // HTTPS only for the FQDN — tailscale serve provides a valid cert for it.
       origins.push(`https://${dns}`);
       origins.push(`http://${dns}:${PORT}`);
-      // Short hostname (e.g. "athena-1" from "athena-1.marlin-mirach.ts.net")
+      // Short hostname (MagicDNS alias, e.g. "athena"). HTTP only — no TLS cert for bare hostnames.
       const shortName = dns.split(".")[0];
       if (shortName) {
-        origins.push(`https://${shortName}`);
         origins.push(`http://${shortName}:${PORT}`);
       }
     }
-    // Tailscale IP addresses (IPv4 and IPv6)
+    // Tailscale IPs. HTTP only — no TLS cert for raw IP addresses.
     for (const ip of ts?.Self?.TailscaleIPs || []) {
       const bracket = ip.includes(":");
-      origins.push(bracket ? `https://[${ip}]` : `https://${ip}`);
       origins.push(bracket ? `http://[${ip}]:${PORT}` : `http://${ip}:${PORT}`);
     }
   } catch (err) {
