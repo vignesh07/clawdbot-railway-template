@@ -1,4 +1,4 @@
-# OpenClaw Railway Template + Tailscale (1‑click deploy)
+# OpenClaw Railway Template + Tailscale (1-click deploy)
 
 Fork of [vignesh07/clawdbot-railway-template](https://github.com/vignesh07/clawdbot-railway-template) that adds **optional Tailscale integration** so you can access your OpenClaw instance over a private tailnet instead of (or in addition to) the public Railway domain.
 
