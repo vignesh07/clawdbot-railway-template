@@ -176,7 +176,7 @@ async function ensureTailscaleServe() {
   if (!started.ok) return started;
 
   try {
-    const serve = await runCmd("tailscale", ["serve", "--bg", "--https=443", `http://127.0.0.1:${INTERNAL_GATEWAY_PORT}`]);
+    const serve = await runCmd("tailscale", ["serve", "--bg", "--https=443", `http://127.0.0.1:${PORT}`]);
     console.log(`[wrapper] tailscale serve exit=${serve.code} output=${debugSnippet(serve.output)}`);
     if (serve.code !== 0) {
       throw new Error(`tailscale serve failed (code=${serve.code}): ${debugSnippet(serve.output)}`);
