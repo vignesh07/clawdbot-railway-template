@@ -128,6 +128,7 @@ async function syncAllowedOrigins() {
       origins.push(ip.includes(":") ? `https://[${ip}]` : `https://${ip}`);
     }
   } catch {}
+  console.log(`[wrapper] syncAllowedOrigins: ${JSON.stringify(origins)}`);
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.controlUi.allowedOrigins", JSON.stringify(origins)])).catch(() => {});
 }
 
