@@ -119,15 +119,23 @@ async function syncAllowedOrigins() {
     const dns = (ts?.Self?.DNSName || "").replace(/\.$/, "");
     if (dns) {
       origins.push(`https://${dns}`);
+      origins.push(`http://${dns}:${PORT}`);
       // Short hostname (e.g. "athena-1" from "athena-1.marlin-mirach.ts.net")
       const shortName = dns.split(".")[0];
-      if (shortName) origins.push(`https://${shortName}`);
+      if (shortName) {
+        origins.push(`https://${shortName}`);
+        origins.push(`http://${shortName}:${PORT}`);
+      }
     }
     // Tailscale IP addresses (IPv4 and IPv6)
     for (const ip of ts?.Self?.TailscaleIPs || []) {
-      origins.push(ip.includes(":") ? `https://[${ip}]` : `https://${ip}`);
+      const bracket = ip.includes(":");
+      origins.push(bracket ? `https://[${ip}]` : `https://${ip}`);
+      origins.push(bracket ? `http://[${ip}]:${PORT}` : `http://${ip}:${PORT}`);
     }
-  } catch {}
+  } catch (err) {
+    console.warn(`[wrapper] syncAllowedOrigins: tailscale status failed: ${String(err)}`);
+  }
   console.log(`[wrapper] syncAllowedOrigins: ${JSON.stringify(origins)}`);
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.controlUi.allowedOrigins", JSON.stringify(origins)])).catch(() => {});
 }
