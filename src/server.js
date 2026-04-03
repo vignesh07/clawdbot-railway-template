@@ -238,22 +238,23 @@ function sleep(ms) {
 async function waitForGatewayReady(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 20_000;
   const start = Date.now();
+  // Use a TCP connect probe: the gateway speaks WebSocket, not plain HTTP,
+  // so fetch() always throws. A successful TCP handshake is enough to know
+  // the port is open and the gateway is accepting connections.
+  const net = await import("node:net");
   while (Date.now() - start < timeoutMs) {
-    try {
-      // Try the default Control UI base path, then fall back to root.
-      const paths = ["/openclaw", "/"];
-      for (const p of paths) {
-        try {
-          const res = await fetch(`${GATEWAY_TARGET}${p}`, { method: "GET" });
-          // Any HTTP response means the port is open.
-          if (res) return true;
-        } catch {
-          // try next
-        }
-      }
-    } catch {
-      // not ready
-    }
+    const ok = await new Promise((resolve) => {
+      const sock = net.createConnection({
+        host: INTERNAL_GATEWAY_HOST,
+        port: INTERNAL_GATEWAY_PORT,
+        timeout: 500,
+      });
+      const done = (v) => { try { sock.destroy(); } catch {} resolve(v); };
+      sock.on("connect", () => done(true));
+      sock.on("timeout", () => done(false));
+      sock.on("error", () => done(false));
+    });
+    if (ok) return true;
     await sleep(250);
   }
   return false;
