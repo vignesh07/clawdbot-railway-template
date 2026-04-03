@@ -22,7 +22,7 @@ WORKDIR /openclaw
 
 # Pin to a known-good ref (tag/branch). Override in Railway template settings if needed.
 # Using a released tag avoids build breakage when `main` temporarily references unpublished packages.
-ARG OPENCLAW_GIT_REF=v2026.3.8
+ARG OPENCLAW_GIT_REF=v2026.3.28
 RUN git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" https://github.com/openclaw/openclaw.git .
 
 # Patch: relax version requirements for packages that may reference unpublished versions.
@@ -46,9 +46,11 @@ ENV NODE_ENV=production
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     tini \
     python3 \
     python3-venv \
+  && curl -fsSL https://tailscale.com/install.sh | sh \
   && rm -rf /var/lib/apt/lists/*
 
 # `openclaw update` expects pnpm. Provide it in the runtime image.

@@ -111,6 +111,111 @@ function isConfigured() {
   }
 }
 
+async function syncAllowedOrigins() {
+  const origins = [`http://localhost:${INTERNAL_GATEWAY_PORT}`, `http://127.0.0.1:${INTERNAL_GATEWAY_PORT}`];
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) origins.push(`https://${process.env.RAILWAY_PUBLIC_DOMAIN}`);
+  try {
+    const ts = JSON.parse((await runCmd("tailscale", ["status", "--json"])).output);
+    const dns = (ts?.Self?.DNSName || "").replace(/\.$/, "");
+    if (dns) {
+      // HTTPS only for the FQDN — tailscale serve provides a valid cert for it.
+      origins.push(`https://${dns}`);
+      origins.push(`http://${dns}:${PORT}`);
+      // Short hostname (MagicDNS alias, e.g. "athena"). HTTP only — no TLS cert for bare hostnames.
+      const shortName = dns.split(".")[0];
+      if (shortName) {
+        origins.push(`http://${shortName}:${PORT}`);
+      }
+    }
+    // Tailscale IPs. HTTP only — no TLS cert for raw IP addresses.
+    for (const ip of ts?.Self?.TailscaleIPs || []) {
+      const bracket = ip.includes(":");
+      origins.push(bracket ? `http://[${ip}]:${PORT}` : `http://${ip}:${PORT}`);
+    }
+  } catch (err) {
+    console.warn(`[wrapper] syncAllowedOrigins: tailscale status failed: ${String(err)}`);
+  }
+  console.log(`[wrapper] syncAllowedOrigins: ${JSON.stringify(origins)}`);
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "gateway.controlUi.allowedOrigins", JSON.stringify(origins)])).catch(() => {});
+}
+
+function debugPrefix(value) {
+  const text = String(value || "").trim();
+  if (!text) return "(missing)";
+  return `${text.slice(0, 10)}... (len=${text.length})`;
+}
+
+function debugSnippet(text, max = 400) {
+  const cleaned = String(text || "").trim();
+  if (!cleaned) return "(no output)";
+  return cleaned.length > max ? `${cleaned.slice(0, max)}...` : cleaned;
+}
+
+let tailscaleUpDone = false;
+let tailscaleServeDone = false;
+
+async function ensureTailscaleBoot() {
+  if (!process.env.TS_AUTHKEY) {
+    console.log("[wrapper] Tailscale bootstrap skipped: TS_AUTHKEY not set");
+    return { ok: false, reason: "TS_AUTHKEY not set" };
+  }
+  if (tailscaleUpDone) return { ok: true };
+
+  try {
+    const hostname = process.env.TS_HOSTNAME?.trim() || "openclaw-railway";
+    console.log(`[wrapper] Tailscale bootstrap: auth=${debugPrefix(process.env.TS_AUTHKEY)} hostname=${debugPrefix(hostname)}`);
+    childProcess.spawn("tailscaled", ["--tun=userspace-networking", "--statedir=/data/tailscale"], { stdio: "ignore" });
+    await sleep(3000);
+
+    const up = await runCmd("tailscale", ["up", `--authkey=${process.env.TS_AUTHKEY}`, `--hostname=${hostname}`]);
+    console.log(`[wrapper] tailscale up exit=${up.code} output=${debugSnippet(up.output)}`);
+    if (up.code !== 0) {
+      throw new Error(`tailscale up failed (code=${up.code}): ${debugSnippet(up.output)}`);
+    }
+
+    const status = await runCmd("tailscale", ["status", "--json"]);
+    console.log(`[wrapper] tailscale status exit=${status.code} output=${debugSnippet(status.output)}`);
+
+    tailscaleUpDone = true;
+    console.log(`[wrapper] Tailscale authenticated (hostname=${hostname})`);
+    return { ok: true };
+  } catch (err) {
+    console.warn(`[wrapper] Tailscale bootstrap failed: ${String(err)}`);
+    return { ok: false, reason: String(err) };
+  }
+}
+
+async function ensureTailscaleServe() {
+  if (!process.env.TS_AUTHKEY) return { ok: false, reason: "TS_AUTHKEY not set" };
+  if (tailscaleServeDone) return { ok: true };
+
+  const started = await ensureTailscaleBoot();
+  if (!started.ok) return started;
+
+  try {
+    const serve = await runCmd("tailscale", ["serve", "--bg", "--https=443", `http://127.0.0.1:${PORT}`]);
+    console.log(`[wrapper] tailscale serve exit=${serve.code} output=${debugSnippet(serve.output)}`);
+    if (serve.code !== 0) {
+      throw new Error(`tailscale serve failed (code=${serve.code}): ${debugSnippet(serve.output)}`);
+    }
+
+    const status = await runCmd("tailscale", ["status", "--json"]);
+    console.log(`[wrapper] tailscale status after serve exit=${status.code} output=${debugSnippet(status.output)}`);
+    const ts = JSON.parse(status.output);
+    const dns = (ts?.Self?.DNSName || "").replace(/\.$/, "");
+    if (dns && isConfigured()) {
+      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.allowTailscale", "true"]));
+      console.log(`[wrapper] Tailscale up: https://${dns}`);
+    }
+
+    tailscaleServeDone = true;
+    return { ok: true };
+  } catch (err) {
+    console.warn(`[wrapper] Tailscale serve failed: ${String(err)}`);
+    return { ok: false, reason: String(err) };
+  }
+}
+
 // One-time migration: rename legacy config files to openclaw.json so existing
 // deployments that still have the old filename on their volume keep working.
 (function migrateLegacyConfigFile() {
@@ -150,22 +255,23 @@ function sleep(ms) {
 async function waitForGatewayReady(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 20_000;
   const start = Date.now();
+  // Use a TCP connect probe: the gateway speaks WebSocket, not plain HTTP,
+  // so fetch() always throws. A successful TCP handshake is enough to know
+  // the port is open and the gateway is accepting connections.
+  const net = await import("node:net");
   while (Date.now() - start < timeoutMs) {
-    try {
-      // Try the default Control UI base path, then fall back to root.
-      const paths = ["/openclaw", "/"];
-      for (const p of paths) {
-        try {
-          const res = await fetch(`${GATEWAY_TARGET}${p}`, { method: "GET" });
-          // Any HTTP response means the port is open.
-          if (res) return true;
-        } catch {
-          // try next
-        }
-      }
-    } catch {
-      // not ready
-    }
+    const ok = await new Promise((resolve) => {
+      const sock = net.createConnection({
+        host: INTERNAL_GATEWAY_HOST,
+        port: INTERNAL_GATEWAY_PORT,
+        timeout: 500,
+      });
+      const done = (v) => { try { sock.destroy(); } catch {} resolve(v); };
+      sock.on("connect", () => done(true));
+      sock.on("timeout", () => done(false));
+      sock.on("error", () => done(false));
+    });
+    if (ok) return true;
     await sleep(250);
   }
   return false;
@@ -242,6 +348,9 @@ async function ensureGatewayRunning() {
         if (!ready) {
           throw new Error("Gateway did not become ready in time");
         }
+
+        // If Tailscale is enabled, expose the gateway only after it's ready.
+        await ensureTailscaleServe();
       } catch (err) {
         const msg = `[gateway] start failure: ${String(err)}`;
         lastGatewayError = msg;
@@ -754,6 +863,8 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       OPENCLAW_NODE,
       clawArgs(["config", "set", "--json", "gateway.trustedProxies", JSON.stringify(["127.0.0.1"]) ]),
     );
+
+    await syncAllowedOrigins();
 
     // Optional: configure a custom OpenAI-compatible provider (base URL) for advanced users.
     if (payload.customProviderId?.trim() && payload.customProviderBaseUrl?.trim()) {
@@ -1355,8 +1466,11 @@ function requireDashboardAuth(req, res, next) {
 // The gateway is only reachable from this container. The Control UI in the browser
 // cannot set custom Authorization headers for WebSocket connections, so we inject
 // the token into proxied requests at the wrapper level.
+// Always overwrite any incoming Authorization header (e.g. browser's cached Basic auth
+// credentials set by requireDashboardAuth) with the gateway Bearer token. The gateway
+// only accepts Bearer auth; Basic auth is already validated upstream by requireDashboardAuth.
 function attachGatewayAuthHeader(req) {
-  if (!req?.headers?.authorization && OPENCLAW_GATEWAY_TOKEN) {
+  if (OPENCLAW_GATEWAY_TOKEN) {
     req.headers.authorization = `Bearer ${OPENCLAW_GATEWAY_TOKEN}`;
   }
 }
@@ -1406,9 +1520,15 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
 
   console.log(`[wrapper] gateway token: ${OPENCLAW_GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
   console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
+  console.log(`[wrapper] TS_AUTHKEY: ${debugPrefix(process.env.TS_AUTHKEY)}`);
+  console.log(`[wrapper] TS_HOSTNAME: ${debugPrefix(process.env.TS_HOSTNAME)}`);
   if (!SETUP_PASSWORD) {
     console.warn("[wrapper] WARNING: SETUP_PASSWORD is not set; /setup will error.");
   }
+
+  // Start/auth Tailscale as early as possible (independent of OpenClaw config).
+  // This ensures the machine appears in the tailnet on first boot.
+  await ensureTailscaleBoot();
 
   // Optional operator hook to install/persist extra tools under /data.
   // This is intentionally best-effort and should be used to set up persistent
@@ -1452,6 +1572,7 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     console.log("[wrapper] config detected; starting gateway...");
     try {
       await ensureGatewayRunning();
+      await syncAllowedOrigins();
       console.log("[wrapper] gateway ready");
     } catch (err) {
       console.error(`[wrapper] gateway failed to start at boot: ${String(err)}`);

@@ -1,4 +1,6 @@
-# OpenClaw Railway Template (1‑click deploy)
+# OpenClaw Railway Template + Tailscale (1‑click deploy)
+
+Fork of [vignesh07/clawdbot-railway-template](https://github.com/vignesh07/clawdbot-railway-template) that adds **optional Tailscale integration** so you can access your OpenClaw instance over a private tailnet instead of (or in addition to) the public Railway domain.
 
 This repo packages **OpenClaw** for Railway with a small **/setup** web wizard so users can deploy and onboard **without running any commands**.
 
@@ -9,6 +11,7 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
 - One-click **Export backup** (so users can migrate off Railway later)
 - **Import backup** from `/setup` (advanced recovery)
+- **Optional Tailscale access** — expose the gateway on your private tailnet via HTTPS (e.g. `https://<hostname>.<tailnet>.ts.net`)
 
 ## How it works (high level)
 
@@ -16,6 +19,7 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - The wrapper protects `/setup` (and the Control UI at `/openclaw`) with `SETUP_PASSWORD` using HTTP Basic auth.
 - During setup, the wrapper runs `openclaw onboard --non-interactive ...` inside the container, writes state to the volume, and then starts the gateway.
 - After setup, **`/` is OpenClaw**. The wrapper reverse-proxies all traffic (including WebSockets) to the local gateway process.
+- If `TS_AUTHKEY` is set, the wrapper runs `tailscale up` at boot and `tailscale serve --https=443` after the gateway is ready, proxying Tailscale HTTPS traffic to the wrapper (which injects the gateway auth token automatically).
 
 ## Railway deploy instructions (what you’ll publish as a Template)
 
@@ -35,6 +39,10 @@ Recommended:
 Optional:
 - `OPENCLAW_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
 
+Tailscale (optional):
+- `TS_AUTHKEY` — a Tailscale auth key ([generate one here](https://login.tailscale.com/admin/settings/keys)). **Use a reusable key** so the node survives redeploys.
+- `TS_HOSTNAME` — the machine name on your tailnet (e.g. `openclaw`). Defaults to the container hostname if not set.
+
 Notes:
 - This template pins OpenClaw to a released version by default via Docker build arg `OPENCLAW_GIT_REF` (override if you want `main`).
 
@@ -48,9 +56,32 @@ Then:
 - Complete setup
 - Visit `https://<your-app>.up.railway.app/` and `/openclaw` (same Basic auth)
 
+## Tailscale access (optional)
+
+If you set `TS_AUTHKEY` (and optionally `TS_HOSTNAME`), the wrapper will:
+
+1. Run `tailscale up --authkey=<key> --hostname=<name>` on container start.
+2. After the gateway becomes ready, run `tailscale serve --bg --https=443 http://127.0.0.1:<PORT>` to expose the wrapper over HTTPS on your tailnet.
+3. Add the Tailscale DNS name (e.g. `https://openclaw.tail1234.ts.net`) to the gateway's `allowedOrigins` so the Control UI works.
+
+Once deployed, access the Control UI at:
+```
+https://<TS_HOSTNAME>.<tailnet>.ts.net
+```
+
+The Tailscale URL does **not** require HTTP Basic auth — access is controlled by your tailnet ACLs. The wrapper still injects the gateway Bearer token automatically.
+
+### Tailscale tips
+
+- **Use a reusable auth key.** Single-use keys are revoked after first use and will fail on redeploy.
+- The auth key must come from the same tailnet as the devices you want to access the instance from.
+- Check `https://<your-app>.up.railway.app/healthz` to confirm Tailscale status and gateway readiness.
+- If Tailscale auth fails, the wrapper logs the error but continues running — the public Railway URL still works.
+
 ## Support / community
 
-- GitHub Issues: https://github.com/vignesh07/clawdbot-railway-template/issues
+- Upstream repo: https://github.com/vignesh07/clawdbot-railway-template
+- This fork: https://github.com/ABFS-Inc/clawdbot-railway-template
 - Discord: https://discord.com/invite/clawd
 
 If you’re filing a bug, please include the output of:
@@ -175,18 +206,6 @@ docker run --rm -p 8080:8080 \
 
 ---
 
-## Official template / endorsements
+## Credits
 
-- Officially recommended by OpenClaw: <https://docs.openclaw.ai/railway>
-- Railway announcement (official): [Railway tweet announcing 1‑click OpenClaw deploy](https://x.com/railway/status/2015534958925013438)
-
-  ![Railway official tweet screenshot](assets/railway-official-tweet.jpg)
-
-- Endorsement from Railway CEO: [Jake Cooper tweet endorsing the OpenClaw Railway template](https://x.com/justjake/status/2015536083514405182)
-
-  ![Jake Cooper endorsement tweet screenshot](assets/railway-ceo-endorsement.jpg)
-
-- Created and maintained by **Vignesh N (@vignesh07)**
-- **11000+ deploys on Railway and counting** [Link to template on Railway](https://railway.com/deploy/clawdbot-railway-template)
-
-![Railway template deploy count](assets/railway-deploys.jpg)
+Based on the [OpenClaw Railway Template](https://github.com/vignesh07/clawdbot-railway-template) created by **Vignesh N (@vignesh07)**. This fork adds optional Tailscale integration only.
