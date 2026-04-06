@@ -1290,8 +1290,10 @@ app.post("/setup/import", requireSetupAuth, async (req, res) => {
       strict: true,
       onwarn: () => {},
       filter: (p) => {
-        // Allow only paths that look safe.
-        return looksSafeTarPath(p);
+        // Allow only paths that look safe and resolve within /data.
+        if (!looksSafeTarPath(p)) return false;
+        const resolved = path.resolve(dataRoot, p);
+        return isUnderDir(resolved, dataRoot);
       },
     });
 
@@ -1333,7 +1335,12 @@ proxy.on("error", (err, _req, res) => {
 // not just the /setup routes.  Healthcheck is excluded so Railway probes work.
 function requireDashboardAuth(req, res, next) {
   if (req.path === "/healthz" || req.path === "/setup/healthz") return next();
-  if (req.path.startsWith("/hooks")) return next(); // allow OpenClaw webhook endpoints to bypass dashboard auth
+  // Allow webhook endpoints to bypass dashboard auth but mark them so we
+  // don't blindly inject the gateway admin token on unauthenticated requests.
+  if (req.path.startsWith("/hooks")) {
+    req._hooksUnauthenticated = true;
+    return next();
+  }
   if (!SETUP_PASSWORD) return next(); // no password configured → open
   const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
@@ -1352,17 +1359,19 @@ function requireDashboardAuth(req, res, next) {
 }
 
 // --- Gateway token injection ---
-// The gateway is only reachable from this container. The Control UI in the browser
-// cannot set custom Authorization headers for WebSocket connections, so we inject
-// the token into proxied requests at the wrapper level.
+// The gateway is only reachable from this container. The wrapper authenticates
+// users via Basic auth (SETUP_PASSWORD) in middleware, then replaces the
+// Authorization header with the Bearer gateway token before proxying.
 function attachGatewayAuthHeader(req) {
-  if (!req?.headers?.authorization && OPENCLAW_GATEWAY_TOKEN) {
+  if (OPENCLAW_GATEWAY_TOKEN) {
     req.headers.authorization = `Bearer ${OPENCLAW_GATEWAY_TOKEN}`;
   }
 }
 
-proxy.on("proxyReqWs", (_proxyReq, req) => {
-  attachGatewayAuthHeader(req);
+proxy.on("proxyReqWs", (proxyReq, req) => {
+  if (OPENCLAW_GATEWAY_TOKEN) {
+    proxyReq.setHeader("authorization", `Bearer ${OPENCLAW_GATEWAY_TOKEN}`);
+  }
 });
 
 app.use(requireDashboardAuth, async (req, res) => {
@@ -1387,7 +1396,11 @@ app.use(requireDashboardAuth, async (req, res) => {
     }
   }
 
-  attachGatewayAuthHeader(req);
+  // Don't inject admin token on unauthenticated webhook paths — let the
+  // gateway validate webhook signatures itself.
+  if (!req._hooksUnauthenticated) {
+    attachGatewayAuthHeader(req);
+  }
   return proxy.web(req, res, { target: GATEWAY_TARGET });
 });
 
@@ -1460,9 +1473,28 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
 });
 
 server.on("upgrade", async (req, socket, head) => {
-  // Note: browsers cannot attach arbitrary HTTP headers (including Authorization: Basic)
-  // in WebSocket handshakes. Do not enforce dashboard Basic auth at the upgrade layer.
-  // The gateway authenticates at the protocol layer and we inject the gateway token below.
+  // Enforce dashboard auth on WebSocket upgrades when SETUP_PASSWORD is set.
+  // Browsers can pass credentials via the URL (wss://user:pass@host) which arrive
+  // as an Authorization: Basic header on the upgrade request.
+  if (SETUP_PASSWORD) {
+    const header = req.headers.authorization || "";
+    const [scheme, encoded] = header.split(" ");
+    let authed = false;
+    if (scheme === "Basic" && encoded) {
+      const decoded = Buffer.from(encoded, "base64").toString("utf8");
+      const idx = decoded.indexOf(":");
+      const password = idx >= 0 ? decoded.slice(idx + 1) : "";
+      authed = password === SETUP_PASSWORD;
+    }
+    // Also allow if the request is from localhost without proxy headers (internal).
+    const fwd = req.headers["x-forwarded-for"];
+    const isInternal = !fwd && (req.socket.remoteAddress === "127.0.0.1" || req.socket.remoteAddress === "::1");
+    if (!authed && !isInternal) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"OpenClaw Dashboard\"\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+  }
 
   if (!isConfigured()) {
     socket.destroy();
