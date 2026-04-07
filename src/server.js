@@ -7,6 +7,7 @@ import path from "node:path";
 import express from "express";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
+import { ensurePreflightWorkspaceAssets } from "./preflight-bootstrap.js";
 
 // Migrate deprecated CLAWDBOT_* env vars → OPENCLAW_* so existing Railway deployments
 // keep working. Users should update their Railway Variables to use the new names.
@@ -1442,6 +1443,13 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
     } catch (err) {
       console.warn(`[wrapper] bootstrap failed (continuing): ${String(err)}`);
     }
+  }
+
+  try {
+    ensurePreflightWorkspaceAssets(WORKSPACE_DIR);
+    console.log("[wrapper] preflight workspace assets synced");
+  } catch (err) {
+    console.warn(`[wrapper] failed to sync preflight workspace assets: ${String(err)}`);
   }
 
   // Sync gateway tokens in config with the current env var on every startup.

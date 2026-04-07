@@ -82,6 +82,7 @@ What persists cleanly today:
   - npm globals: `/data/npm` (binaries in `/data/npm/bin`)
   - pnpm globals: `/data/pnpm` (binaries) + `/data/pnpm-store` (store)
 - **Python packages:** create a venv under `/data` (example below). The runtime image includes Python + venv support.
+- **Preflight snapshot helper:** this template now seeds `/data/workspace/bin/preflight-snapshot.mjs`, `/data/workspace/skills/preflight_snapshot/SKILL.md`, and a managed block in `/data/workspace/AGENTS.md` on startup
 
 What does *not* persist cleanly:
 - `apt-get install ...` (installs into `/usr/*`)
@@ -104,6 +105,24 @@ python3 -m venv /data/venv || true
 # Example: ensure npm/pnpm dirs exist
 mkdir -p /data/npm /data/npm-cache /data/pnpm /data/pnpm-store
 ```
+
+### Built-in preflight snapshot for coding tasks
+
+This template now installs a compact workspace preflight on startup:
+
+- Script: `node /data/workspace/bin/preflight-snapshot.mjs`
+- Skill: `/data/workspace/skills/preflight_snapshot/SKILL.md`
+- Prompt hook: a managed `Preflight Snapshot` block in `/data/workspace/AGENTS.md`
+
+Use it when OpenClaw is doing coding, debugging, build, or terminal-heavy work. The snapshot captures:
+
+- current working directory and git repo state
+- top-level files and detected package entrypoints
+- available runtimes/package managers
+- host memory and disk context
+- OpenClaw workspace/state paths
+
+The goal is to avoid wasting the first few turns on `pwd`, `ls`, `git status`, and basic tool discovery.
 
 ## Troubleshooting
 
