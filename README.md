@@ -36,7 +36,7 @@ Optional:
 - `OPENCLAW_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
 
 Notes:
-- This template pins OpenClaw to a released version by default via Docker build arg `OPENCLAW_GIT_REF` (override if you want `main`).
+- This template pins OpenClaw to a released version by default via Docker build arg `OPENCLAW_GIT_REF` (currently `v2026.4.2`; override if you want `main`).
 
 4) Enable **Public Networking** (HTTP). Railway will assign a domain.
    - This service listens on Railway’s injected `PORT` at runtime (recommended).
@@ -123,6 +123,18 @@ Use it when OpenClaw is doing coding, debugging, build, or terminal-heavy work. 
 - OpenClaw workspace/state paths
 
 The goal is to avoid wasting the first few turns on `pwd`, `ls`, `git status`, and basic tool discovery.
+
+### Memory persistence on Railway
+
+OpenClaw memory is file-backed. In practice that means persistence only works if the agent workspace lives on the Railway volume.
+
+This template now force-syncs the configured agent workspace to `OPENCLAW_WORKSPACE_DIR` on startup so:
+
+- `AGENTS.md`
+- `MEMORY.md`
+- `memory/YYYY-MM-DD.md`
+
+all live under `/data/workspace` by default and survive redeploys.
 
 ## Troubleshooting
 

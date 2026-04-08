@@ -112,6 +112,40 @@ function isConfigured() {
   }
 }
 
+function workspaceDiagnostics() {
+  const scriptPath = path.join(WORKSPACE_DIR, "bin", "preflight-snapshot.mjs");
+  const skillPath = path.join(WORKSPACE_DIR, "skills", "preflight_snapshot", "SKILL.md");
+  const agentsPath = path.join(WORKSPACE_DIR, "AGENTS.md");
+  const memoryPath = path.join(WORKSPACE_DIR, "MEMORY.md");
+  const memoryDir = path.join(WORKSPACE_DIR, "memory");
+
+  let recentMemoryNotes = [];
+  try {
+    if (fs.existsSync(memoryDir)) {
+      recentMemoryNotes = fs.readdirSync(memoryDir)
+        .filter((name) => name.endsWith(".md"))
+        .sort()
+        .slice(-5);
+    }
+  } catch {
+    recentMemoryNotes = [];
+  }
+
+  return {
+    agentsMdPath: agentsPath,
+    agentsMdPresent: fs.existsSync(agentsPath),
+    preflightScriptPath: scriptPath,
+    preflightScriptPresent: fs.existsSync(scriptPath),
+    preflightSkillPath: skillPath,
+    preflightSkillPresent: fs.existsSync(skillPath),
+    memoryPath,
+    memoryPresent: fs.existsSync(memoryPath),
+    memoryDirPath: memoryDir,
+    memoryDirPresent: fs.existsSync(memoryDir),
+    recentMemoryNotes,
+  };
+}
+
 // One-time migration: rename legacy config files to openclaw.json so existing
 // deployments that still have the old filename on their volume keep working.
 (function migrateLegacyConfigFile() {
@@ -231,6 +265,27 @@ async function runDoctorBestEffort() {
   }
 }
 
+async function syncPersistentWorkspaceConfig() {
+  if (!isConfigured()) return;
+
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agents.defaults.workspace", WORKSPACE_DIR]));
+
+  const agentList = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "--json", "agents.list"]));
+  if (agentList.code !== 0) return;
+
+  try {
+    const parsed = JSON.parse(agentList.output || "[]");
+    if (!Array.isArray(parsed)) return;
+
+    const mainIndex = parsed.findIndex((entry) => entry && typeof entry === "object" && entry.id === "main");
+    if (mainIndex >= 0) {
+      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", `agents.list.${mainIndex}.workspace`, WORKSPACE_DIR]));
+    }
+  } catch {
+    // ignore invalid config output
+  }
+}
+
 async function ensureGatewayRunning() {
   if (!isConfigured()) return { ok: false, reason: "not configured" };
   if (gatewayProc) return { ok: true };
@@ -344,6 +399,7 @@ app.get("/healthz", async (_req, res) => {
       configured: isConfigured(),
       stateDir: STATE_DIR,
       workspaceDir: WORKSPACE_DIR,
+      workspace: workspaceDiagnostics(),
     },
     gateway: {
       target: GATEWAY_TARGET,
@@ -748,6 +804,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.remote.token", OPENCLAW_GATEWAY_TOKEN]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agents.defaults.workspace", WORKSPACE_DIR]));
 
     // Railway runs behind a reverse proxy. Trust loopback as a proxy hop so local client detection
     // remains correct when X-Forwarded-* headers are present.
@@ -919,6 +976,7 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       lastDoctorAt,
       lastDoctorOutput,
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+      workspace: workspaceDiagnostics(),
     },
     openclaw: {
       entry: OPENCLAW_ENTRY,
@@ -1461,6 +1519,7 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.remote.token", OPENCLAW_GATEWAY_TOKEN]));
+      await syncPersistentWorkspaceConfig();
       console.log("[wrapper] gateway tokens synced");
     } catch (err) {
       console.warn(`[wrapper] failed to sync gateway tokens: ${String(err)}`);
