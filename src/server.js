@@ -1316,6 +1316,17 @@ const proxy = httpProxy.createProxyServer({
   xfwd: true,
 });
 
+// express.json() consumes the request stream before http-proxy can pipe
+// it.  Re-serialize req.body so the gateway receives the full payload.
+proxy.on("proxyReq", (proxyReq, req) => {
+  if (req.body && typeof req.body === "object" && Object.keys(req.body).length > 0) {
+    const bodyData = JSON.stringify(req.body);
+    proxyReq.setHeader("Content-Type", "application/json");
+    proxyReq.setHeader("Content-Length", Buffer.byteLength(bodyData));
+    proxyReq.write(bodyData);
+  }
+});
+
 proxy.on("error", (err, _req, res) => {
   console.error("[proxy]", err);
   try {
@@ -1387,7 +1398,11 @@ app.use(requireDashboardAuth, async (req, res) => {
     }
   }
 
-  attachGatewayAuthHeader(req);
+  // Hooks have their own auth token (hooks.token); do not inject the
+  // gateway token or the hooks handler will read the wrong credential.
+  if (!req.path.startsWith("/hooks")) {
+    attachGatewayAuthHeader(req);
+  }
   return proxy.web(req, res, { target: GATEWAY_TARGET });
 });
 
