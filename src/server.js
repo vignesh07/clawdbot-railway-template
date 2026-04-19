@@ -143,6 +143,53 @@ let lastGatewayExit = null;
 let lastDoctorOutput = null;
 let lastDoctorAt = null;
 
+async function tryFreePort(port, { signal = 'SIGTERM', waitMs = 500 } = {}) {
+  // On container restart/restart cycles, a zombie openclaw process can keep
+  // port 18789 bound. The supervisor's own tracked handle is null (we're fresh)
+  // so childProcess.kill can't reach it. Shell out to lsof/fuser (installed in
+  // the Dockerfile runtime stage) to find the PID and send it a signal so the
+  // next spawn doesn't fail with EADDRINUSE.
+  const { execFile } = childProcess;
+  const tryCmd = (cmd, args) => new Promise((resolve) => {
+    execFile(cmd, args, { timeout: 3000 }, (err, stdout) => {
+      resolve({ err, stdout: (stdout || '').toString().trim() });
+    });
+  });
+
+  // Prefer lsof: returns one PID per line with -t.
+  let pids = [];
+  const lsof = await tryCmd('lsof', ['-t', `-i:${port}`, '-sTCP:LISTEN']);
+  if (!lsof.err && lsof.stdout) {
+    pids = lsof.stdout.split(/\s+/).filter(Boolean);
+  }
+
+  // Fall back to fuser if lsof is missing.
+  if (pids.length === 0) {
+    const fuser = await tryCmd('fuser', [`${port}/tcp`]);
+    if (!fuser.err && fuser.stdout) {
+      pids = fuser.stdout.split(/\s+/).filter(Boolean);
+    }
+  }
+
+  if (pids.length === 0) return { killed: [], reason: 'no listener' };
+
+  const killed = [];
+  for (const raw of pids) {
+    const pid = Number.parseInt(raw, 10);
+    if (!Number.isFinite(pid) || pid <= 1) continue;
+    try {
+      process.kill(pid, signal);
+      killed.push(pid);
+    } catch {
+      // already gone
+    }
+  }
+  if (killed.length > 0 && waitMs > 0) {
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+  return { killed, reason: killed.length ? `killed with ${signal}` : 'no pids killed' };
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -190,6 +237,24 @@ async function startGateway() {
     "--token",
     OPENCLAW_GATEWAY_TOKEN,
   ];
+
+  // Defend against zombie openclaw processes from a previous container life
+  // that never got reaped — their listener still holds INTERNAL_GATEWAY_PORT
+  // and the new spawn would fail with EADDRINUSE. lsof is installed in the
+  // runtime image for exactly this purpose.
+  try {
+    const free = await tryFreePort(INTERNAL_GATEWAY_PORT, { signal: 'SIGTERM' });
+    if (free.killed.length > 0) {
+      console.warn(`[gateway] freed port ${INTERNAL_GATEWAY_PORT} before spawn (pids=${free.killed.join(',')})`);
+      // If SIGTERM didn't stick, escalate.
+      const still = await tryFreePort(INTERNAL_GATEWAY_PORT, { signal: 'SIGKILL' });
+      if (still.killed.length > 0) {
+        console.warn(`[gateway] escalated to SIGKILL on port ${INTERNAL_GATEWAY_PORT} (pids=${still.killed.join(',')})`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[gateway] tryFreePort failed: ${String(err)}`);
+  }
 
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
     stdio: "inherit",
@@ -268,6 +333,16 @@ async function restartGateway() {
     await sleep(750);
     gatewayProc = null;
   }
+  // Always sweep port 18789 before restart — a stuck child could have escaped
+  // SIGTERM, and a previous container life may have left a zombie.
+  try {
+    const free = await tryFreePort(INTERNAL_GATEWAY_PORT, { signal: 'SIGKILL' });
+    if (free.killed.length > 0) {
+      console.warn(`[gateway] restart killed lingering pids on ${INTERNAL_GATEWAY_PORT}: ${free.killed.join(',')}`);
+    }
+  } catch {
+    // best-effort
+  }
   return ensureGatewayRunning();
 }
 
@@ -329,7 +404,8 @@ async function probeGateway() {
 // Keep this free of secrets.
 app.get("/healthz", async (_req, res) => {
   let gatewayReachable = false;
-  if (isConfigured()) {
+  const configured = isConfigured();
+  if (configured) {
     try {
       gatewayReachable = await probeGateway();
     } catch {
@@ -337,10 +413,14 @@ app.get("/healthz", async (_req, res) => {
     }
   }
 
-  res.json({
-    ok: true,
+  // Fail the healthcheck when the gateway is supposed to be running but the
+  // internal port is dead. Railway's healthcheck (restartPolicyType=on_failure)
+  // will restart the container, which clears zombie listeners.
+  const ok = !configured || gatewayReachable;
+  const body = {
+    ok,
     wrapper: {
-      configured: isConfigured(),
+      configured,
       stateDir: STATE_DIR,
       workspaceDir: WORKSPACE_DIR,
     },
@@ -351,7 +431,8 @@ app.get("/healthz", async (_req, res) => {
       lastExit: lastGatewayExit,
       lastDoctorAt,
     },
-  });
+  };
+  res.status(ok ? 200 : 503).json(body);
 });
 
 app.get("/setup/app.js", requireSetupAuth, (_req, res) => {
