@@ -1,8 +1,6 @@
 name: Bump OpenClaw release ref
 
 on:
-  schedule:
-    - cron: "23 9 * * *" # daily 09:23 UTC
   workflow_dispatch: {}
 
 permissions:

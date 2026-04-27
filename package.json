@@ -15,6 +15,11 @@
   "dependencies": {
     "express": "^5.1.0",
     "http-proxy": "^1.18.1",
-    "tar": "^7.5.4"
+    "tar": "^7.5.4",
+    "openclaw": "2026.4.24",
+    "@aws-sdk/client-bedrock": "3.1020.0"
+  },
+  "overrides": {
+    "axios": "1.15.0"
   }
 }
