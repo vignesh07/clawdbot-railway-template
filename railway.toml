@@ -3,7 +3,7 @@ builder = "dockerfile"
 
 [deploy]
 healthcheckPath = "/setup/healthz"
-healthcheckTimeout = 300
+healthcheckTimeout = 8080
 restartPolicyType = "on_failure"
 
 # Require a persistent volume mounted at /data (Railway).
