@@ -1373,6 +1373,11 @@ oauthProxy.on("error", (err, _req, res) => {
   res.status(502).type("text/plain").send("OAuth server unavailable");
 });
 app.use(["/oauth/start", "/oauth/callback"], (req, res) => {
+  // app.use() strips the mount path from req.url before this handler runs,
+  // so the Python OAuth server was receiving "/" (or "/{account}") instead of
+  // /oauth/start | /oauth/callback?... — every Google redirect 404'd and the
+  // one-click re-auth flow never completed. Restore the full original URL.
+  req.url = req.originalUrl;
   oauthProxy.web(req, res);
 });
 
