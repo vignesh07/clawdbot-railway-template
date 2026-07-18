@@ -1,0 +1,266 @@
+---
+# OpenClaw AI Agent + DefenseClaw Sidecar
+# Control UI at openclaw.0xcode.dev
+#
+# Config and data live on host at /home/nicks/.openclaw/
+# DefenseClaw sidecar monitors OpenClaw on localhost:18789, exposes API on 18970
+#
+# Deploy:
+#   kubectl apply -f openclaw-secrets.yaml
+#   kubectl apply -f openclaw-deployment.yaml
+#
+# ──────────────────────────────────────────────────
+#  NAMESPACE
+# ──────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openclaw
+---
+# ──────────────────────────────────────────────────
+#  DEPLOYMENT (OpenClaw + DefenseClaw sidecar)
+# ──────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw
+  namespace: openclaw
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: openclaw
+  template:
+    metadata:
+      labels:
+        app: openclaw
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      hostAliases:
+      - ip: "192.168.68.249"
+        hostnames:
+        - litellm.0xcode.dev
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+      containers:
+      - name: openclaw
+        image: localhost:32000/openclaw:latest
+        imagePullPolicy: Always
+        command: ["openclaw"]
+        args: ["gateway", "--allow-unconfigured"]
+        securityContext:
+          privileged: false
+          allowPrivilegeEscalation: false
+        ports:
+        - containerPort: 18789
+          name: gateway
+        env:
+        - name: OPENCLAW_GATEWAY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: gateway-token
+        - name: HOME
+          value: /home/node
+        - name: OPENCLAW_GATEWAY_BIND
+          value: "0.0.0.0"
+        - name: NODE_ENV
+          value: "production"
+        - name: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+          value: "1"
+        - name: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+          value: /usr/bin/chromium
+        envFrom:
+          - secretRef:
+              name: openclaw-secrets
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+        volumeMounts:
+        - name: openclaw-home
+          mountPath: /home/node/.openclaw
+        - name: host-src
+          mountPath: /host/src
+        - name: tmp-screenshots
+          mountPath: /tmp/test-screenshots
+        startupProbe:
+          httpGet:
+            host: 127.0.0.1
+            path: /
+            port: 18789
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          failureThreshold: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            host: 127.0.0.1
+            path: /
+            port: 18789
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 5
+          timeoutSeconds: 5
+        livenessProbe:
+          httpGet:
+            host: 127.0.0.1
+            path: /
+            port: 18789
+          initialDelaySeconds: 30
+          periodSeconds: 60
+          failureThreshold: 5
+          timeoutSeconds: 5
+      - name: defenseclaw
+        image: localhost:32000/involving-ai/defenseclaw-gateway:0.6.6-ext2
+        imagePullPolicy: Always
+        securityContext:
+          privileged: false
+          allowPrivilegeEscalation: false
+        ports:
+        - containerPort: 18970
+          name: defenseclaw-api
+        env:
+        - name: HOME
+          value: /home/node
+        - name: DEFENSECLAW_HOME
+          value: /home/node/.openclaw/.defenseclaw
+        - name: DEFENSECLAW_CUSTOM_PROVIDERS_PATH
+          value: /home/node/.openclaw/.defenseclaw/custom-providers.json
+        - name: DEFENSECLAW_GATEWAY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: gateway-token
+        - name: DEFENSECLAW_LLM_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: DEFENSECLAW_LLM_KEY
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: "1"
+            memory: 512Mi
+        volumeMounts:
+        - name: openclaw-home
+          mountPath: /home/node/.openclaw
+        startupProbe:
+          httpGet:
+            host: 127.0.0.1
+            path: /health
+            port: 18970
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            host: 127.0.0.1
+            path: /health
+            port: 18970
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          failureThreshold: 5
+          timeoutSeconds: 5
+        livenessProbe:
+          httpGet:
+            host: 127.0.0.1
+            path: /health
+            port: 18970
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 5
+          timeoutSeconds: 5
+      volumes:
+      - name: openclaw-home
+        hostPath:
+          path: /home/nicks/.openclaw
+          type: DirectoryOrCreate
+      - name: host-src
+        hostPath:
+          path: /mnt/wdblue/src
+          type: Directory
+      - name: tmp-screenshots
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw
+  namespace: openclaw
+spec:
+  selector:
+    app: openclaw
+  ports:
+  - port: 18789
+    targetPort: 18789
+    name: gateway
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: defenseclaw-api
+  namespace: openclaw
+spec:
+  selector:
+    app: openclaw
+  ports:
+  - port: 18970
+    targetPort: 18970
+    name: defenseclaw-api
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openclaw
+  namespace: openclaw
+spec:
+  tls:
+  - hosts:
+    - openclaw.0xcode.dev
+    secretName: wildcard-0xcode-dev-tls
+  rules:
+  - host: openclaw.0xcode.dev
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: openclaw
+            port:
+              number: 18789
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: defenseclaw
+  namespace: openclaw
+spec:
+  ingressClassName: traefik
+  tls:
+  - hosts:
+    - defense.0xcode.dev
+    secretName: wildcard-0xcode-dev-tls
+  rules:
+  - host: defense.0xcode.dev
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: defenseclaw-api
+            port:
+              number: 18970

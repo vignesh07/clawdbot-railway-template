@@ -1331,44 +1331,221 @@ proxy.on("error", (err, _req, res) => {
 // --- Dashboard password protection ---
 // Require the same SETUP_PASSWORD for the entire Control UI dashboard,
 // not just the /setup routes.  Healthcheck is excluded so Railway probes work.
+function safeEqual(a, b) {
+  const ab = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+// Cookie-based dashboard session: value = HMAC(SETUP_PASSWORD) so verification
+// is stateless, invalidates on password change, and never echoes the password.
+const DASHBOARD_COOKIE = "oc_dashboard_session";
+function dashboardSessionToken() {
+  if (!SETUP_PASSWORD) return "";
+  return crypto.createHmac("sha256", SETUP_PASSWORD).update("oc_dashboard_v1").digest("hex");
+}
+function hasValidDashboardCookie(req) {
+  if (!SETUP_PASSWORD) return false;
+  const expected = dashboardSessionToken();
+  const raw = String(req.headers.cookie || "");
+  for (const part of raw.split(";")) {
+    const [k, v] = part.trim().split("=");
+    if (k === DASHBOARD_COOKIE && v && safeEqual(v, expected)) return true;
+  }
+  return false;
+}
+
+function wantsHtml(req) {
+  return String(req.headers.accept || "").includes("text/html");
+}
+
+function renderLoginPage(message) {
+  const msg = message ? `<p class="err">${escapeHtml(message)}</p>` : "";
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenClaw Dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center;
+         font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         background:#0b0d10; color:#e6e8eb; }
+  form { background:#13171c; padding:28px 32px; border-radius:12px;
+         box-shadow:0 10px 40px rgba(0,0,0,.4); min-width:320px; }
+  h1 { margin:0 0 16px; font-size:18px; font-weight:600; letter-spacing:.2px; }
+  label { display:block; margin:14px 0 6px; font-size:13px; color:#9aa4ae; }
+  input[type=password] { width:100%; padding:10px 12px; border-radius:8px;
+         border:1px solid #23272d; background:#0b0d10; color:inherit; font-size:14px; }
+  button { margin-top:18px; width:100%; padding:10px 12px; border-radius:8px;
+         border:0; background:#3d6bff; color:#fff; font-weight:600; cursor:pointer; }
+  button:hover { background:#4a76ff; }
+  .err { margin:0 0 10px; color:#ff6b6b; font-size:13px; }
+</style>
+</head>
+<body>
+<form method="POST" action="/__login" autocomplete="off">
+  <h1>OpenClaw Dashboard</h1>
+  ${msg}
+  <label for="p">Password</label>
+  <input id="p" type="password" name="password" autofocus required>
+  <button type="submit">Unlock</button>
+</form>
+</body>
+</html>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function setDashboardCookie(res) {
+  const token = dashboardSessionToken();
+  res.append(
+    "Set-Cookie",
+    `${DASHBOARD_COOKIE}=${token}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax`,
+  );
+}
+
+// POST /__login — exchange SETUP_PASSWORD for a session cookie; browsers land
+// here from renderLoginPage. Keeps the native Basic prompt out of the UX.
+app.post(
+  "/__login",
+  express.urlencoded({ extended: false, limit: "16kb" }),
+  (req, res) => {
+    if (!SETUP_PASSWORD) return res.redirect("/");
+    const submitted = String(req.body?.password ?? "");
+    if (!safeEqual(submitted, SETUP_PASSWORD)) {
+      return res.status(401).type("html").send(renderLoginPage("Incorrect password."));
+    }
+    setDashboardCookie(res);
+    const nextPath = typeof req.query.next === "string" && req.query.next.startsWith("/") ? req.query.next : "/";
+    return res.redirect(nextPath);
+  },
+);
+
 function requireDashboardAuth(req, res, next) {
   if (req.path === "/healthz" || req.path === "/setup/healthz") return next();
   if (req.path.startsWith("/hooks")) return next(); // allow OpenClaw webhook endpoints to bypass dashboard auth
+  if (req.path === "/__login") return next();
   if (!SETUP_PASSWORD) return next(); // no password configured → open
+
+  // Cookie session: already authenticated via /__login form.
+  if (hasValidDashboardCookie(req)) return next();
+
   const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
-  if (scheme !== "Basic" || !encoded) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Dashboard"');
-    return res.status(401).send("Auth required");
+
+  // Accept `Authorization: Bearer <GATEWAY_TOKEN>` as an equivalent credential so
+  // API clients / CLIs that already hold the gateway token aren't forced through
+  // a login UI. The Bearer header passes through to the gateway unchanged.
+  if (scheme === "Bearer" && encoded && OPENCLAW_GATEWAY_TOKEN && safeEqual(encoded, OPENCLAW_GATEWAY_TOKEN)) {
+    return next();
   }
-  const decoded = Buffer.from(encoded, "base64").toString("utf8");
-  const idx = decoded.indexOf(":");
-  const password = idx >= 0 ? decoded.slice(idx + 1) : "";
-  if (password !== SETUP_PASSWORD) {
-    res.set("WWW-Authenticate", 'Basic realm="OpenClaw Dashboard"');
-    return res.status(401).send("Invalid password");
+
+  // Accept Basic for non-browser clients (curl, scripts) that already integrated
+  // against the old behavior. On success, also set the cookie so repeat browser
+  // requests don't need to resend credentials.
+  if (scheme === "Basic" && encoded) {
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+    const idx = decoded.indexOf(":");
+    const password = idx >= 0 ? decoded.slice(idx + 1) : "";
+    if (safeEqual(password, SETUP_PASSWORD)) {
+      setDashboardCookie(res);
+      return next();
+    }
   }
-  return next();
+
+  // Browsers: render an HTML login form instead of the native Basic dialog.
+  if (wantsHtml(req) && req.method === "GET") {
+    return res.status(401).type("html").send(renderLoginPage());
+  }
+  // Non-browser clients still get a Basic/Bearer challenge.
+  res.set("WWW-Authenticate", 'Basic realm="OpenClaw Dashboard", Bearer realm="OpenClaw Gateway"');
+  return res.status(401).send("Auth required");
 }
 
 // --- Gateway token injection ---
 // The gateway is only reachable from this container. The Control UI in the browser
 // cannot set custom Authorization headers for WebSocket connections, so we inject
 // the token into proxied requests at the wrapper level.
+//
+// Must overwrite any existing Authorization header: once dashboard auth has been
+// validated, the browser's `Basic <SETUP_PASSWORD>` header would otherwise leak to
+// the gateway and be rejected as a token mismatch.
 function attachGatewayAuthHeader(req) {
-  if (!req?.headers?.authorization && OPENCLAW_GATEWAY_TOKEN) {
-    req.headers.authorization = `Bearer ${OPENCLAW_GATEWAY_TOKEN}`;
-  }
+  if (!req?.headers || !OPENCLAW_GATEWAY_TOKEN) return;
+  req.headers.authorization = `Bearer ${OPENCLAW_GATEWAY_TOKEN}`;
 }
 
 proxy.on("proxyReqWs", (_proxyReq, req) => {
   attachGatewayAuthHeader(req);
 });
 
+// --- Control UI bootstrap ---
+// openclaw >= v2026.4.24 changed the Control UI so the gateway token is read from
+// localStorage["openclaw.control.settings.v1"].token and sent inside the WS
+// handshake message payload, not as an HTTP Authorization header. The wrapper's
+// proxy-level Authorization injection is therefore invisible to the new auth
+// path, and the gateway replies with reason=token_missing — surfacing as a
+// second Basic auth prompt / "paste token in Control UI settings" error.
+//
+// Before the Control UI loads for the first time in a browser, serve a small
+// bootstrap HTML that writes the known gateway token into localStorage. Gated by
+// a cookie so it only runs once, and only served after requireDashboardAuth so
+// the token never leaves the authenticated dashboard trust boundary.
+const BOOTSTRAP_COOKIE = "oc_wrapper_bootstrapped";
+const CONTROL_UI_SETTINGS_KEY = "openclaw.control.settings.v1";
+
+function needsControlUiBootstrap(req) {
+  if (!OPENCLAW_GATEWAY_TOKEN) return false;
+  if (req.method !== "GET") return false;
+  if (req.path !== "/") return false;
+  const accept = String(req.headers.accept || "");
+  if (!accept.includes("text/html")) return false;
+  const cookie = String(req.headers.cookie || "");
+  return !cookie.split(";").some((c) => c.trim().startsWith(`${BOOTSTRAP_COOKIE}=`));
+}
+
+function sendControlUiBootstrap(res) {
+  const tokenJson = JSON.stringify(OPENCLAW_GATEWAY_TOKEN);
+  const keyJson = JSON.stringify(CONTROL_UI_SETTINGS_KEY);
+  // Token lands in client-side localStorage; this response is only reachable after
+  // requireDashboardAuth has validated SETUP_PASSWORD.
+  const html = `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Loading Control UI…</title></head>
+<body>
+<script>
+(function () {
+  try {
+    var key = ${keyJson};
+    var current = {};
+    try { current = JSON.parse(localStorage.getItem(key) || "{}") || {}; } catch (_) {}
+    if (!current.token) current.token = ${tokenJson};
+    localStorage.setItem(key, JSON.stringify(current));
+  } catch (_) {}
+  document.cookie = "${BOOTSTRAP_COOKIE}=1; Path=/; Max-Age=31536000; SameSite=Strict; Secure";
+  location.replace("/");
+})();
+</script>
+</body>
+</html>
+`;
+  res.set("Cache-Control", "no-store");
+  res.status(200).type("html").send(html);
+}
+
 app.use(requireDashboardAuth, async (req, res) => {
   // If not configured, force users to /setup for any non-setup routes.
   if (!isConfigured() && !req.path.startsWith("/setup")) {
     return res.redirect("/setup");
+  }
+
+  if (isConfigured() && needsControlUiBootstrap(req)) {
+    return sendControlUiBootstrap(res);
   }
 
   if (isConfigured()) {

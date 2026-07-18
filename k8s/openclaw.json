@@ -1,0 +1,457 @@
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "keepRecentTokens": 32768,
+        "maxHistoryShare": 0.6,
+        "mode": "default",
+        "postIndexSync": "async",
+        "recentTurnsPreserve": 6,
+        "reserveTokens": 16384
+      },
+      "imageGenerationModel": {
+        "primary": "openai/gpt-image-1"
+      },
+      "imageModel": {
+        "fallbacks": [],
+        "primary": "litellm/Qwen3.6-35B-A3B"
+      },
+      "maxConcurrent": 6,
+      "memorySearch": {
+        "local": {
+          "modelCacheDir": "/home/nicks/.openclaw/modelCacheDir"
+        },
+        "provider": "local"
+      },
+      "model": {
+        "fallbacks": [],
+        "primary": "litellm/Qwen3.6-27B-FP8"
+      },
+      "models": {
+        "litellm/Qwen3.6-27B": {
+          "params": {
+            "cacheRetention": "short"
+          }
+        },
+        "litellm/Qwen3.6-35B-A3B": {}
+      },
+      "params": {
+        "cacheRetention": "short"
+      },
+      "sandbox": {
+        "mode": "off"
+      },
+      "subagents": {
+        "archiveAfterMinutes": 60,
+        "maxConcurrent": 4,
+        "model": "litellm/Qwen3.6-35B-A3B"
+      },
+      "timeoutSeconds": 10800,
+      "workspace": "/home/nicks/.openclaw/workspace"
+    },
+    "list": [
+      {
+        "default": true,
+        "id": "general",
+        "name": "General"
+      },
+      {
+        "agentDir": "/home/nicks/.openclaw/agents/opus/agent",
+        "id": "opus",
+        "model": "anthropic/claude-opus-4-8",
+        "name": "opus",
+        "workspace": "/home/nicks/.openclaw/workspace-opus"
+      },
+      {
+        "agentDir": "/home/nicks/.openclaw/agents/qwen35b/agent",
+        "id": "qwen35b",
+        "model": "litellm/Qwen3.6-35B-A3B",
+        "name": "qwen35b",
+        "workspace": "/home/nicks/.openclaw/workspace-qwen35b"
+      }
+    ]
+  },
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "lan",
+    "auth": {
+      "mode": "token",
+      "token": {
+        "__COMMENT__": "redacted - use k8s secret ref"
+      }
+    },
+    "controlUi": {
+      "allowedOrigins": [
+        "https://openclaw.0xcode.dev",
+        "http://localhost:18789",
+        "http://127.0.0.1:18789"
+      ],
+      "dangerouslyDisableDeviceAuth": true
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    },
+    "remote": {
+      "token": {
+        "__COMMENT__": "redacted"
+      }
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "trustedProxies": [
+      "127.0.0.0/8",
+      "10.0.0.0/8",
+      "192.168.0.0/16"
+    ]
+  },
+  "plugins": {
+    "allow": [
+      "telegram",
+      "litellm",
+      "browser",
+      "brave",
+      "memory-core",
+      "memory-wiki",
+      "openai",
+      "defenseclaw",
+      "anthropic"
+    ],
+    "entries": {
+      "anthropic": {
+        "enabled": true
+      },
+      "brave": {
+        "enabled": true,
+        "config": {
+          "webSearch": {
+            "apiKey": {
+              "__COMMENT__": "redacted"
+            }
+          }
+        }
+      },
+      "browser": {
+        "enabled": true
+      },
+      "defenseclaw": {
+        "enabled": true
+      },
+      "litellm": {
+        "enabled": true
+      },
+      "memory-core": {
+        "enabled": true,
+        "config": {
+          "dreaming": {
+            "enabled": true
+          }
+        }
+      },
+      "memory-wiki": {
+        "enabled": true
+      },
+      "openai": {
+        "enabled": true,
+        "config": {
+          "personality": "friendly"
+        }
+      },
+      "telegram": {
+        "enabled": true
+      }
+    },
+    "load": {
+      "paths": [
+        "/home/node/.openclaw/extensions/defenseclaw"
+      ]
+    }
+  },
+  "tools": {
+    "allow": [
+      "exec",
+      "process",
+      "read",
+      "write",
+      "edit",
+      "sessions_spawn"
+    ],
+    "profile": "coding",
+    "web": {
+      "fetch": {
+        "enabled": true
+      },
+      "search": {
+        "enabled": true
+      }
+    },
+    "media": {
+      "image": {
+        "enabled": true,
+        "maxBytes": 10485760,
+        "maxChars": 1000,
+        "models": [
+          {
+            "model": "Qwen3.6-27B",
+            "provider": "litellm"
+          }
+        ]
+      }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "agent-memory-bridge": {
+        "command": "python3",
+        "args": [
+          "/home/node/.openclaw/mcp/agent-memory-bridge/stdio-mcp-proxy.py"
+        ]
+      }
+    }
+  },
+  "session": {
+    "dmScope": "per-channel-peer",
+    "reset": {
+      "idleMinutes": 525600,
+      "mode": "idle"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "groupPolicy": "allowlist",
+      "accounts": {
+        "default": {
+          "botToken": {
+            "__COMMENT__": "redacted - use k8s secret"
+          },
+          "dmPolicy": "allowlist",
+          "groupPolicy": "allowlist"
+        },
+        "opus-bot": {
+          "botToken": {
+            "__COMMENT__": "redacted"
+          },
+          "dmPolicy": "allowlist",
+          "groupPolicy": "open"
+        },
+        "qwen35b-bot": {
+          "botToken": {
+            "__COMMENT__": "redacted"
+          },
+          "dmPolicy": "allowlist",
+          "groupPolicy": "open"
+        }
+      }
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "general",
+      "match": {
+        "accountId": "default",
+        "channel": "telegram"
+      }
+    },
+    {
+      "agentId": "opus",
+      "match": {
+        "accountId": "opus-bot",
+        "channel": "telegram"
+      }
+    },
+    {
+      "agentId": "qwen35b",
+      "match": {
+        "accountId": "faran_opus",
+        "channel": "telegram"
+      },
+      "type": "route"
+    },
+    {
+      "agentId": "qwen35b",
+      "match": {
+        "accountId": "qwen35b-bot",
+        "channel": "telegram"
+      },
+      "type": "route"
+    }
+  ],
+  "browser": {
+    "enabled": true,
+    "headless": true,
+    "noSandbox": true,
+    "defaultProfile": "openclaw"
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "litellm": {
+        "api": "openai-completions",
+        "apiKey": {
+          "__COMMENT__": "redacted - use k8s secret"
+        },
+        "baseUrl": "https://litellm.0xcode.dev/v1/",
+        "request": {
+          "allowPrivateNetwork": true
+        },
+        "models": [
+          {
+            "id": "Qwen3.6-27B-FP8",
+            "name": "Qwen3.6-27B-FP8 (vLLM TP=4, 5070 Ti)",
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "reasoning": true
+          },
+          {
+            "id": "Qwen3.6-27B",
+            "name": "Qwen 3.6 27B (unified pool, 256k, vLLM TP=8)",
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ]
+          },
+          {
+            "id": "DeepSeek-V4-Flash",
+            "name": "DeepSeek V4 Flash (FP8 native, vLLM TP=8)",
+            "contextWindow": 65536,
+            "maxTokens": 65536,
+            "reasoning": true
+          },
+          {
+            "id": "MiniMax-M2.5",
+            "name": "MiniMax-M2.5",
+            "contextWindow": 196608,
+            "maxTokens": 196608,
+            "reasoning": true
+          },
+          {
+            "id": "MiniMax-M2.7",
+            "name": "MiniMax M2.7 (UD-Q8_K_XL, llama.cpp 8x 3090 + CPU spill)",
+            "contextWindow": 196608,
+            "maxTokens": 65536,
+            "reasoning": true
+          },
+          {
+            "id": "qwen3-coder-next",
+            "name": "qwen3-coder-next",
+            "contextWindow": 262144,
+            "maxTokens": 65536
+          },
+          {
+            "id": "moonshotai/kimi-k2.5",
+            "name": "moonshotai/kimi-k2.5",
+            "contextWindow": 256000,
+            "maxTokens": 8192,
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ]
+          },
+          {
+            "id": "qwen35",
+            "name": "Qwen 3.5 397B",
+            "contextWindow": 262144,
+            "maxTokens": 81920,
+            "reasoning": true
+          },
+          {
+            "id": "user.Qwen3-Coder-Next-GGUF",
+            "name": "Qwen3 Coder Next (Local GPU)",
+            "contextWindow": 262144,
+            "maxTokens": 65536
+          },
+          {
+            "id": "claude-opus-4-8",
+            "name": "Claude Opus 4.8",
+            "contextWindow": 200000,
+            "maxTokens": 128000,
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ]
+          },
+          {
+            "id": "Qwen3.6-35B-A3B",
+            "name": "Qwen 3.6 35B-A3B (Vision, via lemonade)",
+            "contextWindow": 400000,
+            "maxTokens": 65536,
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ]
+          }
+        ]
+      },
+      "gemma4direct": {
+        "api": "openai-completions",
+        "apiKey": "sk-no-key-required",
+        "baseUrl": "https://gemma4-26b-a4b.0xcode.dev/v1/",
+        "request": {
+          "allowPrivateNetwork": true
+        },
+        "models": [
+          {
+            "id": "user.Gemma-4-26B-A4B-GGUF",
+            "name": "Gemma 4 26B (Vision)",
+            "contextWindow": 131072,
+            "maxTokens": 32768,
+            "input": [
+              "text",
+              "image"
+            ]
+          }
+        ]
+      },
+      "minimax27direct": {
+        "api": "openai-completions",
+        "apiKey": "sk-no-key-required",
+        "baseUrl": "https://minimax-m27.0xcode.dev/v1/",
+        "request": {
+          "allowPrivateNetwork": true
+        },
+        "models": [
+          {
+            "id": "MiniMax-M2.7-UD-Q8_K_XL-00001-of-00006.gguf",
+            "name": "MiniMax M2.7 (Direct)",
+            "contextWindow": 196608,
+            "maxTokens": 65536
+          }
+        ]
+      },
+      "qwen35direct": {
+        "api": "openai-completions",
+        "apiKey": "sk-no-key-required",
+        "baseUrl": "https://qwen35-397b.0xcode.dev/v1/",
+        "request": {
+          "allowPrivateNetwork": true
+        },
+        "models": [
+          {
+            "id": "qwen35",
+            "name": "Qwen 3.5 397B (Direct)",
+            "contextWindow": 262144,
+            "maxTokens": 81920
+          }
+        ]
+      }
+    }
+  },
+  "meta": {
+    "lastTouchedAt": "2026-07-15T21:50:11.089Z",
+    "lastTouchedVersion": "2026.4.12"
+  }
+}

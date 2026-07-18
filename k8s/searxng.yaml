@@ -1,0 +1,191 @@
+---
+# SearXNG — Self-hosted metasearch instance
+# Deployed to Hetzner (alreadysites-us) in acme-openclaw namespace
+#
+# Deploy:
+#   kubectl --context alreadysites-us apply -f k8s/searxng.yaml
+#
+# Service DNS: searxng.acme-openclaw.svc.cluster.local:8080
+# All agents reach it via the K8s internal DNS.
+# ──────────────────────────────────────────────────
+#  NAMESPACE (if not already created)
+# ──────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: acme-openclaw
+---
+# ──────────────────────────────────────────────────
+#  CONFIGMAP (enable JSON output format)
+# ──────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: searxng-settings
+  namespace: acme-openclaw
+data:
+  settings.yml: |
+    use_default_settings: true
+    search:
+      formats:
+        - html
+        - json
+---
+# ──────────────────────────────────────────────────
+#  DEPLOYMENT
+# ──────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: searxng
+  namespace: acme-openclaw
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: searxng
+  template:
+    metadata:
+      labels:
+        app: searxng
+    spec:
+      containers:
+      - name: searxng
+        image: searxng/searxng:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: SEARXNG_HOST
+          value: "0.0.0.0"
+        - name: SEARXNG_PORT
+          value: "8080"
+        - name: SEARXNG_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: searxng-secret
+              key: secret-key
+        volumeMounts:
+        - name: searxng-settings
+          mountPath: /etc/searxng/settings.yml
+          subPath: settings.yml
+        resources:
+          requests:
+            cpu: 50m
+            memory: 40Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          failureThreshold: 5
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 5
+          timeoutSeconds: 5
+      - name: redis
+        image: redis:7-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 6379
+          name: redis
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+      volumes:
+      - name: searxng-settings
+        configMap:
+          name: searxng-settings
+---
+# ──────────────────────────────────────────────────
+#  SERVICE (ClusterIP — internal only, no ingress)
+# ──────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: searxng
+  namespace: acme-openclaw
+spec:
+  selector:
+    app: searxng
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+---
+# ──────────────────────────────────────────────────
+#  SECRET
+# ──────────────────────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: searxng-secret
+  namespace: acme-openclaw
+type: Opaque
+stringData:
+  secret-key: "2467017c7f4eedfb7149456be00506d9321489e07a66efc82ee67dde7637c2d4"
+---
+# ──────────────────────────────────────────────────
+#  NETWORKPOLICY (allow agents → searxng on 8080)
+# ──────────────────────────────────────────────────
+# Required because default-deny blocks all ingress in this namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agents-to-searxng
+  namespace: acme-openclaw
+spec:
+  podSelector:
+    matchLabels:
+      app: searxng
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/part-of: acme-openclaw
+    ports:
+    - port: 8080
+      protocol: TCP
+---
+# ──────────────────────────────────────────────────
+#  NETWORKPOLICY (allow agents egress → searxng)
+# ──────────────────────────────────────────────────
+# Required because allow-internet-only explicitly excludes 10.0.0.0/8
+# (the cluster pod CIDR), blocking agents from reaching internal services.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agents-egress-to-searxng
+  namespace: acme-openclaw
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: acme-openclaw
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: searxng
+    ports:
+    - port: 8080
+      protocol: TCP
