@@ -33,6 +33,12 @@ RUN set -eux; \
     sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*"workspace:[^"]+"/"openclaw": "*"/g' "$f"; \
   done
 
+# pnpm 11 ignores minimumReleaseAge in .npmrc (auth/registry only). Env overrides
+# upstream pnpm-workspace.yaml (minimumReleaseAge: 2880), which blocked
+# @openclaw/ai@2026.9.1 during Hop A with ERR_PNPM_NO_MATURE_MATCHING_VERSION.
+ENV pnpm_config_minimumReleaseAge=0
+RUN sed -i -E 's/^minimumReleaseAge:[[:space:]]*[0-9]+/minimumReleaseAge: 0/' pnpm-workspace.yaml
+
 RUN pnpm install --no-frozen-lockfile
 RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
