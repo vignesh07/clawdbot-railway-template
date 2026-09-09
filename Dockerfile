@@ -25,13 +25,10 @@ WORKDIR /openclaw
 ARG OPENCLAW_GIT_REF=v2026.8.2
 RUN git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" https://github.com/openclaw/openclaw.git .
 
-# Patch: relax version requirements for packages that may reference unpublished versions.
-# Apply to all extension package.json files to handle workspace protocol (workspace:*).
-RUN set -eux; \
-  find ./extensions -name 'package.json' -type f | while read -r f; do \
-    sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*">=[^"]+"/"openclaw": "*"/g' "$f"; \
-    sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*"workspace:[^"]+"/"openclaw": "*"/g' "$f"; \
-  done
+# Do not rewrite extension "openclaw" deps (workspace:* / >=…) to registry "*".
+# Hop B: * pulled npm openclaw@2026.9.3, whose preinstall requires Node ≥24.16,
+# while this image is node:22-bookworm. Leave workspace/local ranges so pnpm
+# resolves the cloned monorepo package (8.2 when OPENCLAW_GIT_REF=v2026.8.2).
 
 # pnpm 11 ignores minimumReleaseAge in .npmrc (auth/registry only). Env overrides
 # upstream pnpm-workspace.yaml (minimumReleaseAge: 2880), which blocked
