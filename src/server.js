@@ -749,10 +749,11 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
 
     // Railway runs behind a reverse proxy. Trust loopback as a proxy hop so local client detection
-    // remains correct when X-Forwarded-* headers are present.
+    // remains correct when X-Forwarded-* headers are present. Include both IPv4 and IPv6
+    // loopback so the wrapper (which may bind either family) is consistently trusted.
     await runCmd(
       OPENCLAW_NODE,
-      clawArgs(["config", "set", "--json", "gateway.trustedProxies", JSON.stringify(["127.0.0.1"]) ]),
+      clawArgs(["config", "set", "--json", "gateway.trustedProxies", JSON.stringify(["127.0.0.1", "::1"]) ]),
     );
 
     // Optional: configure a custom OpenAI-compatible provider (base URL) for advanced users.
@@ -1443,6 +1444,40 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
       console.log("[wrapper] gateway tokens synced");
     } catch (err) {
       console.warn(`[wrapper] failed to sync gateway tokens: ${String(err)}`);
+    }
+  }
+
+  // Migration: ensure gateway.trustedProxies is set for existing deployments that
+  // were configured before the template started writing it. OpenClaw 2026.9.4 enforces
+  // proxy attribution strictly when X-Forwarded-* headers are present, which causes
+  // Railway reverse-proxied requests to fail with `proxy_attribution_required`
+  // when the wrapper's loopback source is not in trustedProxies.
+  if (isConfigured()) {
+    try {
+      const check = await runCmd(
+        OPENCLAW_NODE,
+        clawArgs(["config", "get", "gateway.trustedProxies"]),
+      );
+      const haveIpv4 = check.code === 0 && /127\.0\.0\.1/.test(check.output || "");
+      const haveIpv6 = check.code === 0 && /::1/.test(check.output || "");
+      if (!haveIpv4 || !haveIpv6) {
+        console.log(
+          "[wrapper] migrating: setting gateway.trustedProxies (127.0.0.1, ::1) for Railway reverse proxy",
+        );
+        await runCmd(
+          OPENCLAW_NODE,
+          clawArgs([
+            "config",
+            "set",
+            "--json",
+            "gateway.trustedProxies",
+            JSON.stringify(["127.0.0.1", "::1"]),
+          ]),
+        );
+        console.log("[wrapper] gateway.trustedProxies migrated");
+      }
+    } catch (err) {
+      console.warn(`[wrapper] failed to migrate gateway.trustedProxies: ${String(err)}`);
     }
   }
 
