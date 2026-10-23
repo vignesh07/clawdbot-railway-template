@@ -1,42 +1,19 @@
-# Build openclaw from source to avoid npm packaging gaps (some dist files are not shipped).
-FROM node:22-bookworm AS openclaw-build
-
-# Dependencies needed for openclaw build
-RUN apt-get update \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    git \
-    ca-certificates \
-    curl \
-    python3 \
-    make \
-    g++ \
-  && rm -rf /var/lib/apt/lists/*
-
-# Install Bun (openclaw build uses it)
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
-
-RUN corepack enable
-
-WORKDIR /openclaw
-
-# Pin to a known-good ref (tag/branch). Override in Railway template settings if needed.
-# Using a released tag avoids build breakage when `main` temporarily references unpublished packages.
-ARG OPENCLAW_GIT_REF=v2026.3.8
-RUN git clone --depth 1 --branch "${OPENCLAW_GIT_REF}" https://github.com/openclaw/openclaw.git .
-
-# Patch: relax version requirements for packages that may reference unpublished versions.
-# Apply to all extension package.json files to handle workspace protocol (workspace:*).
-RUN set -eux; \
-  find ./extensions -name 'package.json' -type f | while read -r f; do \
-    sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*">=[^"]+"/"openclaw": "*"/g' "$f"; \
-    sed -i -E 's/"openclaw"[[:space:]]*:[[:space:]]*"workspace:[^"]+"/"openclaw": "*"/g' "$f"; \
-  done
-
-RUN pnpm install --no-frozen-lockfile
-RUN pnpm build
-ENV OPENCLAW_PREFER_PNPM=1
-RUN pnpm ui:install && pnpm ui:build
+# OpenClaw is consumed as the prebuilt release image that upstream publishes
+# for every tag (ghcr.io/openclaw/openclaw:<version>), instead of cloning the
+# repo and compiling it (pnpm install + 7 tsdown passes + Control UI build)
+# on every Railway deploy. Pulling the release layers takes ~1-2 min; the old
+# source build took 15-90 min with zero cache hits.
+#
+# The release image lays out OpenClaw at /app (dist/, node_modules/,
+# extensions/, openclaw.mjs, ...). We copy that tree to /openclaw so the
+# wrapper's `node /openclaw/dist/entry.js` entry keeps working unchanged.
+#
+# Pin to a released version. Override in Railway template settings if needed.
+# Tag 2026.8.35 = index digest
+#   sha256:48fcc97d60d8c5a73d19595066dc0aec64a8317549720ae0cb5f35b4751fafc5
+# (built 2026-10-02 from openclaw/openclaw@713ba578, Node 24.19 / bookworm-slim).
+ARG OPENCLAW_VERSION=2026.8.35
+FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION} AS openclaw-release
 
 
 # Runtime image
@@ -69,8 +46,15 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev && npm cache clean --force
 
-# Copy built openclaw
-COPY --from=openclaw-build /openclaw /openclaw
+# Copy prebuilt openclaw (dist/, node_modules/, extensions/, skills/, docs/ ...)
+# from the upstream release image. Its native addons are N-API builds for
+# linux-x64 glibc, so they load on this image's Node as well.
+COPY --from=openclaw-release /app /openclaw
+
+# Fail the build early if the release image layout ever changes.
+RUN test -f /openclaw/dist/entry.js \
+  && test -d /openclaw/dist/control-ui \
+  && node /openclaw/openclaw.mjs --version
 
 # Provide an openclaw executable
 RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"' > /usr/local/bin/openclaw \

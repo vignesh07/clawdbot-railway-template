@@ -1365,6 +1365,46 @@ proxy.on("proxyReqWs", (_proxyReq, req) => {
   attachGatewayAuthHeader(req);
 });
 
+// OAuth proxy — bypass dashboard auth so Gmail OAuth callback reaches the Python server.
+const OAUTH_PORT = Number.parseInt(process.env.OAUTH_PORT ?? "8081", 10);
+const oauthProxy = httpProxy.createProxyServer({ target: `http://127.0.0.1:${OAUTH_PORT}` });
+oauthProxy.on("error", (err, _req, res) => {
+  console.error("[oauth-proxy]", err);
+  res.status(502).type("text/plain").send("OAuth server unavailable");
+});
+app.use(["/oauth/start", "/oauth/callback"], (req, res) => {
+  // app.use() strips the mount path from req.url before this handler runs,
+  // so the Python OAuth server was receiving "/" (or "/{account}") instead of
+  // /oauth/start | /oauth/callback?... — every Google redirect 404'd and the
+  // one-click re-auth flow never completed. Restore the full original URL.
+  req.url = req.originalUrl;
+  oauthProxy.web(req, res);
+});
+
+// TradeStation OAuth proxy — /ts-callback/start and /ts-callback must bypass
+// dashboard auth so TradeStation's redirect reaches the local OAuth server
+// (the same Python server that serves the Gmail /oauth routes, on OAUTH_PORT
+// unless TS_OAUTH_PORT overrides it). Previously this route only existed as
+// an in-container patch and was lost on every deploy.
+const TS_OAUTH_PORT = Number.parseInt(process.env.TS_OAUTH_PORT ?? String(OAUTH_PORT), 10);
+const tsOauthProxy = httpProxy.createProxyServer({ target: `http://127.0.0.1:${TS_OAUTH_PORT}` });
+tsOauthProxy.on("error", (err, _req, res) => {
+  console.error("[ts-oauth-proxy]", err);
+  try {
+    if (res && !res.headersSent) {
+      res.status(502).type("text/plain").send("TS OAuth server unavailable");
+    }
+  } catch {
+    // ignore
+  }
+});
+app.use(["/ts-callback"], (req, res) => {
+  // Same mount-path stripping issue as the Gmail OAuth proxy above: restore the
+  // full original URL so the Python server sees /ts-callback/start or /ts-callback?code=...
+  req.url = req.originalUrl;
+  tsOauthProxy.web(req, res);
+});
+
 app.use(requireDashboardAuth, async (req, res) => {
   // If not configured, force users to /setup for any non-setup routes.
   if (!isConfigured() && !req.path.startsWith("/setup")) {
