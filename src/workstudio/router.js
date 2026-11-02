@@ -2,6 +2,7 @@ import childProcess from "node:child_process";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureGatewayClient, getGatewayClientState } from "./gateway-client.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,6 +52,20 @@ function runOpenClaw(args, timeoutMs = 15_000) {
 
 workstudioRouter.get("/healthz", (_req, res) => {
   res.json({ ok: true, service: "ai-workstudio", version: "v1" });
+});
+
+workstudioRouter.get("/api/gateway", async (_req, res) => {
+  try {
+    await ensureGatewayClient();
+    return res.json({ ok: true, data: getGatewayClientState() });
+  } catch (error) {
+    return res.status(502).json({
+      ok: false,
+      error: "Unable to connect Workstudio gateway client",
+      detail: String(error?.message || error),
+      data: getGatewayClientState(),
+    });
+  }
 });
 
 workstudioRouter.get("/api/sessions", async (_req, res) => {
