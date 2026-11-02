@@ -14,7 +14,7 @@ RUN apt-get update \
     g++ \
   && rm -rf /var/lib/apt/lists/*
 
-  COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
 RUN bun --version
 
 WORKDIR /openclaw
@@ -42,6 +42,11 @@ RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:install && pnpm ui:build
 
+# Shrink the filesystem copied into the runtime image without changing runtime features.
+# Keep workspaces/extensions/skills intact, but remove build-only dependencies and metadata.
+RUN pnpm install --prod --no-frozen-lockfile \
+  && rm -rf .git ui/node_modules \
+  && find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
 
 # Runtime image
 FROM node:26-bookworm
@@ -74,7 +79,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev && npm cache clean --force
 
-# Copy built openclaw
+# Copy built OpenClaw runtime tree after production-only pruning.
 COPY --from=openclaw-build /openclaw /openclaw
 
 # Provide an openclaw executable
