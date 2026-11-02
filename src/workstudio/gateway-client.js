@@ -13,6 +13,7 @@ let subscribed = false;
 let sessions = [];
 let lastEventAt = null;
 let lastError = null;
+let lastFrame = null;
 let requestSeq = 0;
 const pending = new Map();
 
@@ -44,6 +45,7 @@ function sendRequest(method, params = {}, timeoutMs = 10_000) {
     }, timeoutMs);
 
     pending.set(id, {
+      method,
       resolve: (value) => {
         clearTimeout(timer);
         resolve(value);
@@ -73,6 +75,8 @@ function mergeSessionChanged(payload) {
 }
 
 async function handleFrame(frame) {
+  lastFrame = frame;
+
   if (frame?.type === "event") {
     lastEventAt = new Date().toISOString();
 
@@ -103,13 +107,16 @@ async function handleFrame(frame) {
       const subscription = await sendRequest("sessions.subscribe", {
         limit: 60,
         ownerFirst: true,
-        source: "dashboard",
       });
 
       const payload = subscription?.payload || subscription || {};
       const list = payload?.list || {};
       sessions = Array.isArray(list.sessions) ? list.sessions : Array.isArray(list.items) ? list.items : [];
       subscribed = payload?.subscribed === true;
+
+      if (!subscribed) {
+        throw new Error(`sessions.subscribe returned without subscribed=true: ${JSON.stringify(payload).slice(0, 800)}`);
+      }
       return;
     }
 
@@ -131,7 +138,8 @@ async function handleFrame(frame) {
     pending.delete(frame.id);
 
     if (frame.ok === false) {
-      waiter.reject(new Error(frame.error?.message || frame.error?.code || "Gateway request failed"));
+      const message = frame.error?.message || frame.error?.code || "Gateway request failed";
+      waiter.reject(new Error(`${waiter.method}: ${message}`));
     } else {
       waiter.resolve(frame);
     }
@@ -148,7 +156,7 @@ function resetSocketState() {
 }
 
 export async function ensureGatewayClient() {
-  if (connected && socket?.readyState === WebSocket.OPEN) return getGatewayClientState();
+  if (connected && subscribed && socket?.readyState === WebSocket.OPEN) return getGatewayClientState();
   if (connecting) return connecting;
 
   if (!GATEWAY_TOKEN) {
@@ -160,10 +168,15 @@ export async function ensureGatewayClient() {
     const ws = new WebSocket(GATEWAY_URL);
     socket = ws;
 
-    const connectTimer = setTimeout(() => {
-      lastError = "Gateway handshake timed out";
+    const fail = (error) => {
+      const message = String(error?.message || error || "Gateway connection failed");
+      lastError = message;
       try { ws.close(); } catch {}
-      reject(new Error(lastError));
+      reject(new Error(message));
+    };
+
+    const connectTimer = setTimeout(() => {
+      fail(lastError || "Gateway handshake timed out");
     }, 15_000);
 
     ws.addEventListener("message", async (event) => {
@@ -176,19 +189,21 @@ export async function ensureGatewayClient() {
           resolve(getGatewayClientState());
         }
       } catch (error) {
-        lastError = String(error?.message || error);
+        clearTimeout(connectTimer);
+        fail(error);
       }
     });
 
     ws.addEventListener("error", () => {
-      lastError = "Gateway WebSocket error";
+      if (!lastError) lastError = "Gateway WebSocket error";
     });
 
     ws.addEventListener("close", () => {
       clearTimeout(connectTimer);
       const wasReady = connected && subscribed;
+      const errorBeforeClose = lastError;
       resetSocketState();
-      if (!wasReady) reject(new Error(lastError || "Gateway socket closed before handshake completed"));
+      if (!wasReady && errorBeforeClose) reject(new Error(errorBeforeClose));
     });
   }).finally(() => {
     connecting = null;
@@ -208,5 +223,6 @@ export function getGatewayClientState() {
     sessions,
     lastEventAt,
     lastError,
+    lastFrame,
   };
 }
