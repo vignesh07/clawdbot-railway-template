@@ -12,18 +12,18 @@
       <div>
         <p class="eyebrow">AI TEAM OPERATING SYSTEM</p>
         <h1>AI Workstudio</h1>
-        <p class="subtitle">Dashboard V1 骨架</p>
+        <p class="subtitle">Dashboard V1 · 真實狀態驗證</p>
       </div>
-      <div class="status-pill" id="systemStatus">UI READY</div>
+      <div class="status-pill" id="systemStatus">LOADING</div>
     </header>
 
     <section class="grid">
       <article class="card hero-card">
         <div class="card-header">
           <h2>Central Control</h2>
-          <span class="badge">dynamic</span>
+          <span class="badge">on demand</span>
         </div>
-        <p>目前僅驗證 Dashboard 路由與靜態資源，不連接 Gateway、不執行 polling、不呼叫 AI 模型。</p>
+        <p id="snapshotSummary">正在讀取 OpenClaw session snapshot。此頁不使用 polling，也不呼叫 AI 模型。</p>
       </article>
 
       <article class="card">
@@ -31,15 +31,19 @@
           <h2>Agent State</h2>
           <span class="badge muted">registry-driven</span>
         </div>
-        <p class="empty">等待從 OpenClaw Registry / Gateway 載入 Agent 與 Team，不在前端寫死名單。</p>
+        <div class="agent-list" id="agentList">
+          <p class="empty">載入中…</p>
+        </div>
       </article>
 
       <article class="card">
         <div class="card-header">
-          <h2>Recent Activity</h2>
-          <span class="badge muted">event-driven</span>
+          <h2>Recent Sessions</h2>
+          <span class="badge muted">snapshot</span>
         </div>
-        <p class="empty">尚未連接 OpenClaw Gateway events。</p>
+        <div class="agent-list" id="sessionList">
+          <p class="empty">載入中…</p>
+        </div>
       </article>
     </section>
   </main>
