@@ -21,7 +21,7 @@
       <article class="card hero-card">
         <div class="card-header">
           <h2>Central Control</h2>
-          <span class="badge">main</span>
+          <span class="badge">dynamic</span>
         </div>
         <p>目前僅驗證 Dashboard 路由與靜態資源，不連接 Gateway、不執行 polling、不呼叫 AI 模型。</p>
       </article>
@@ -29,19 +29,15 @@
       <article class="card">
         <div class="card-header">
           <h2>Agent State</h2>
-          <span class="badge muted">placeholder</span>
+          <span class="badge muted">registry-driven</span>
         </div>
-        <div class="agent-list">
-          <div class="agent-row"><span>main</span><strong>idle</strong></div>
-          <div class="agent-row"><span>designer</span><strong>idle</strong></div>
-          <div class="agent-row"><span>technical</span><strong>idle</strong></div>
-        </div>
+        <p class="empty">等待從 OpenClaw Registry / Gateway 載入 Agent 與 Team，不在前端寫死名單。</p>
       </article>
 
       <article class="card">
         <div class="card-header">
           <h2>Recent Activity</h2>
-          <span class="badge muted">placeholder</span>
+          <span class="badge muted">event-driven</span>
         </div>
         <p class="empty">尚未連接 OpenClaw Gateway events。</p>
       </article>
