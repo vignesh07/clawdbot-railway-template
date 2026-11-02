@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Workstudio</title>
+  <link rel="stylesheet" href="/workstudio/style.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">AI TEAM OPERATING SYSTEM</p>
+        <h1>AI Workstudio</h1>
+        <p class="subtitle">Dashboard V1 骨架</p>
+      </div>
+      <div class="status-pill" id="systemStatus">UI READY</div>
+    </header>
+
+    <section class="grid">
+      <article class="card hero-card">
+        <div class="card-header">
+          <h2>Central Control</h2>
+          <span class="badge">main</span>
+        </div>
+        <p>目前僅驗證 Dashboard 路由與靜態資源，不連接 Gateway、不執行 polling、不呼叫 AI 模型。</p>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <h2>Agent State</h2>
+          <span class="badge muted">placeholder</span>
+        </div>
+        <div class="agent-list">
+          <div class="agent-row"><span>main</span><strong>idle</strong></div>
+          <div class="agent-row"><span>designer</span><strong>idle</strong></div>
+          <div class="agent-row"><span>technical</span><strong>idle</strong></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <h2>Recent Activity</h2>
+          <span class="badge muted">placeholder</span>
+        </div>
+        <p class="empty">尚未連接 OpenClaw Gateway events。</p>
+      </article>
+    </section>
+  </main>
+  <script src="/workstudio/app.js" defer></script>
+</body>
+</html>
