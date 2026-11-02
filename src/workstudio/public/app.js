@@ -37,16 +37,16 @@ function renderRows(container, rows, emptyText) {
   }
 }
 
-async function loadSnapshot() {
+async function loadGatewayState() {
   try {
-    const response = await fetch("/workstudio/api/sessions", {
+    const response = await fetch("/workstudio/api/gateway", {
       headers: { Accept: "application/json" },
       cache: "no-store",
     });
 
     const payload = await response.json();
     if (!response.ok || !payload.ok) {
-      throw new Error(payload.error || `HTTP ${response.status}`);
+      throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
     }
 
     const data = payload.data || {};
@@ -54,7 +54,7 @@ async function loadSnapshot() {
 
     const byAgent = new Map();
     for (const session of sessions) {
-      const agentId = session.agentId || "unknown";
+      const agentId = session.agentId || session.owner || "unknown";
       const existing = byAgent.get(agentId) || { active: 0, total: 0 };
       existing.total += 1;
       if (sessionState(session) === "working") existing.active += 1;
@@ -69,21 +69,21 @@ async function loadSnapshot() {
       }));
 
     const recentSessions = sessions.slice(0, 12).map((session) => ({
-      label: session.key || session.agentId || "session",
+      label: session.key || session.id || session.agentId || session.owner || "session",
       state: sessionState(session),
     }));
 
-    renderRows(agentListEl, agents, "目前 snapshot 沒有 Agent session。 ");
-    renderRows(sessionListEl, recentSessions, "目前沒有 session。 ");
+    renderRows(agentListEl, agents, "目前 Gateway subscription 沒有 Agent session。");
+    renderRows(sessionListEl, recentSessions, "目前沒有 session。");
 
-    statusEl.textContent = "CONNECTED";
-    summaryEl.textContent = `已從 OpenClaw 讀取 ${sessions.length} 筆 session snapshot；資料來源為按需讀取，未啟用 polling。`;
+    statusEl.textContent = data.connected && data.subscribed ? "CONNECTED" : "DEGRADED";
+    summaryEl.textContent = `Gateway ${data.serverVersion || "unknown"} · protocol ${data.protocol ?? "-"} · subscription ${data.subscribed ? "active" : "inactive"} · ${sessions.length} sessions。資料來自 Gateway subscription 記憶體狀態，不再執行 CLI session snapshot。`;
   } catch (error) {
     statusEl.textContent = "ERROR";
-    summaryEl.textContent = `無法讀取 OpenClaw snapshot：${error.message}`;
-    renderRows(agentListEl, [], "尚未取得 Agent 資料。 ");
-    renderRows(sessionListEl, [], "尚未取得 Session 資料。 ");
+    summaryEl.textContent = `無法讀取 Gateway subscription：${error.message}`;
+    renderRows(agentListEl, [], "尚未取得 Agent 資料。");
+    renderRows(sessionListEl, [], "尚未取得 Session 資料。");
   }
 }
 
-loadSnapshot();
+loadGatewayState();
