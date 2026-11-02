@@ -8,6 +8,8 @@ import express from "express";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
 
+import { workstudioRouter } from "./workstudio/router.js";
+
 // Migrate deprecated CLAWDBOT_* env vars → OPENCLAW_* so existing Railway deployments
 // keep working. Users should update their Railway Variables to use the new names.
 for (const suffix of ["PUBLIC_PORT", "STATE_DIR", "WORKSPACE_DIR", "GATEWAY_TOKEN", "CONFIG_PATH"]) {
@@ -1308,6 +1310,8 @@ app.post("/setup/import", requireSetupAuth, async (req, res) => {
     res.status(500).type("text/plain").send(String(err));
   }
 });
+
+app.use("/workstudio", requireSetupAuth, workstudioRouter);
 
 // Proxy everything else to the gateway.
 const proxy = httpProxy.createProxyServer({
