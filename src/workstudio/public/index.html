@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Workstudio</title>
+  <link rel="stylesheet" href="/workstudio/style.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">AI TEAM OPERATING SYSTEM</p>
+        <h1>AI Workstudio</h1>
+        <p class="subtitle">Dashboard V1 · 真實狀態驗證</p>
+      </div>
+      <div class="status-pill" id="systemStatus">LOADING</div>
+    </header>
+
+    <section class="grid">
+      <article class="card hero-card">
+        <div class="card-header">
+          <h2>Central Control</h2>
+          <span class="badge">on demand</span>
+        </div>
+        <p id="snapshotSummary">正在讀取 OpenClaw session snapshot。此頁不使用 polling，也不呼叫 AI 模型。</p>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <h2>Agent State</h2>
+          <span class="badge muted">registry-driven</span>
+        </div>
+        <div class="agent-list" id="agentList">
+          <p class="empty">載入中…</p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <h2>Recent Sessions</h2>
+          <span class="badge muted">snapshot</span>
+        </div>
+        <div class="agent-list" id="sessionList">
+          <p class="empty">載入中…</p>
+        </div>
+      </article>
+    </section>
+  </main>
+  <script src="/workstudio/app.js" defer></script>
+</body>
+</html>
