@@ -15,7 +15,9 @@ let lastEventAt = null;
 let lastError = null;
 let lastFrame = null;
 let requestSeq = 0;
+let shouldStayConnected = false;
 const pending = new Map();
+const stateListeners = new Set();
 
 function nextId(prefix = "workstudio") {
   requestSeq += 1;
@@ -28,6 +30,13 @@ function parseFrame(data) {
   if (ArrayBuffer.isView(data)) return JSON.parse(Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8"));
   if (data && typeof data.text === "function") return data.text().then((text) => JSON.parse(text));
   return JSON.parse(String(data));
+}
+
+function notifyStateListeners() {
+  const state = getGatewayClientState();
+  for (const listener of stateListeners) {
+    try { listener(state); } catch {}
+  }
 }
 
 function sendRequest(method, params = {}, timeoutMs = 10_000) {
@@ -117,17 +126,21 @@ async function handleFrame(frame) {
       if (!subscribed) {
         throw new Error(`sessions.subscribe returned without subscribed=true: ${JSON.stringify(payload).slice(0, 800)}`);
       }
+
+      notifyStateListeners();
       return;
     }
 
     if (frame.event === "sessions.changed") {
       mergeSessionChanged(frame.payload || {});
+      notifyStateListeners();
       return;
     }
 
     if (frame.event === "shutdown") {
       connected = false;
       subscribed = false;
+      notifyStateListeners();
     }
     return;
   }
@@ -153,9 +166,12 @@ function resetSocketState() {
   for (const [, waiter] of pending) waiter.reject(new Error("Gateway socket closed"));
   pending.clear();
   socket = null;
+  notifyStateListeners();
 }
 
 export async function ensureGatewayClient() {
+  shouldStayConnected = true;
+
   if (connected && subscribed && socket?.readyState === WebSocket.OPEN) return getGatewayClientState();
   if (connecting) return connecting;
 
@@ -186,6 +202,13 @@ export async function ensureGatewayClient() {
         if (connected && subscribed) {
           clearTimeout(connectTimer);
           lastError = null;
+
+          if (!shouldStayConnected) {
+            try { ws.close(1000, "No Workstudio viewers"); } catch {}
+            reject(new Error("Gateway client no longer needed"));
+            return;
+          }
+
           resolve(getGatewayClientState());
         }
       } catch (error) {
@@ -210,6 +233,19 @@ export async function ensureGatewayClient() {
   });
 
   return connecting;
+}
+
+export function disconnectGatewayClient() {
+  shouldStayConnected = false;
+  const ws = socket;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    try { ws.close(1000, "No Workstudio viewers"); } catch {}
+  }
+}
+
+export function subscribeGatewayClientState(listener) {
+  stateListeners.add(listener);
+  return () => stateListeners.delete(listener);
 }
 
 export function getGatewayClientState() {
