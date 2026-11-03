@@ -11,6 +11,7 @@ let connected = false;
 let hello = null;
 let subscribed = false;
 let sessions = [];
+let agentRoster = [];
 let lastEventAt = null;
 let lastError = null;
 let lastFrame = null;
@@ -83,6 +84,131 @@ function mergeSessionChanged(payload) {
   else sessions.unshift(row);
 }
 
+function extractAgentRoster(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.agents)) return payload.agents;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.list)) return payload.list;
+  if (Array.isArray(payload?.list?.agents)) return payload.list.agents;
+  if (Array.isArray(payload?.list?.items)) return payload.list.items;
+  return [];
+}
+
+function sessionAgentId(session) {
+  return session?.agentId || session?.owner || null;
+}
+
+function sessionKey(session) {
+  return session?.key || session?.id || null;
+}
+
+function isWorkingSession(session) {
+  if (session?.hasActiveRun === true || session?.running === true) return true;
+  const status = String(session?.status || session?.state || "").toLowerCase();
+  return ["active", "running", "working"].includes(status);
+}
+
+function isErrorSession(session) {
+  if (session?.error) return true;
+  const status = String(session?.status || session?.state || "").toLowerCase();
+  return ["error", "failed", "failure"].includes(status);
+}
+
+function sessionTimestamp(session) {
+  for (const value of [
+    session?.lastActivityAt,
+    session?.updatedAt,
+    session?.lastMessageAt,
+    session?.createdAt,
+  ]) {
+    if (value == null) continue;
+    const timestamp = typeof value === "number" ? value : Date.parse(value);
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return null;
+}
+
+function modelLabel(value) {
+  if (!value) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    return value.id || value.modelId || value.name || null;
+  }
+  return null;
+}
+
+function runtimeLabel(value) {
+  if (!value) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    return value.id || value.runtimeId || value.name || value.type || null;
+  }
+  return null;
+}
+
+function agentIdFromEntry(entry) {
+  return entry?.id || entry?.agentId || null;
+}
+
+export function buildAgentOverview(roster = agentRoster, sessionRows = sessions) {
+  const sessionGroups = new Map();
+
+  for (const session of sessionRows) {
+    const agentId = sessionAgentId(session);
+    if (!agentId) continue;
+    const rows = sessionGroups.get(agentId) || [];
+    rows.push(session);
+    sessionGroups.set(agentId, rows);
+  }
+
+  const overview = [];
+
+  for (const entry of roster) {
+    const agentId = agentIdFromEntry(entry);
+    if (!agentId) continue;
+
+    const rows = sessionGroups.get(agentId) || [];
+    const ordered = [...rows].sort((a, b) => (sessionTimestamp(b) ?? 0) - (sessionTimestamp(a) ?? 0));
+    const active = ordered.find(isWorkingSession) || null;
+    const latest = ordered[0] || null;
+    const latestTimestamp = latest ? sessionTimestamp(latest) : null;
+
+    let status = "idle";
+    if (active) status = "working";
+    else if (latest && isErrorSession(latest)) status = "error";
+
+    const model = modelLabel(
+      entry?.effectiveModel ??
+      entry?.model ??
+      entry?.modelId ??
+      entry?.runtime?.model ??
+      entry?.effectiveRuntime?.model,
+    );
+
+    const runtime = runtimeLabel(entry?.effectiveRuntime ?? entry?.runtime ?? entry?.runtimeId);
+
+    overview.push({
+      agentId,
+      name: entry?.name || entry?.identity?.name || agentId,
+      team: entry?.teamId || entry?.team?.id || null,
+      status,
+      model,
+      runtime,
+      kind: entry?.kind || null,
+      isDefault: entry?.isDefault === true,
+      lastActivityAt: latestTimestamp == null ? null : new Date(latestTimestamp).toISOString(),
+      activeSession: active ? sessionKey(active) : null,
+      sessionCount: rows.length,
+    });
+  }
+
+  return overview.sort((a, b) => {
+    if (a.status === "working" && b.status !== "working") return -1;
+    if (b.status === "working" && a.status !== "working") return 1;
+    return a.agentId.localeCompare(b.agentId);
+  });
+}
+
 async function handleFrame(frame) {
   lastFrame = frame;
 
@@ -126,6 +252,10 @@ async function handleFrame(frame) {
       if (!subscribed) {
         throw new Error(`sessions.subscribe returned without subscribed=true: ${JSON.stringify(payload).slice(0, 800)}`);
       }
+
+      const rosterResponse = await sendRequest("agents.list", {});
+      const rosterPayload = rosterResponse?.payload || rosterResponse || {};
+      agentRoster = extractAgentRoster(rosterPayload);
 
       notifyStateListeners();
       return;
@@ -249,12 +379,16 @@ export function subscribeGatewayClientState(listener) {
 }
 
 export function getGatewayClientState() {
+  const agents = buildAgentOverview();
+
   return {
     url: GATEWAY_URL,
     connected,
     subscribed,
     protocol: hello?.protocol ?? null,
     serverVersion: hello?.server?.version ?? null,
+    agentCount: agents.length,
+    agents,
     sessionCount: sessions.length,
     sessions,
     lastEventAt,
