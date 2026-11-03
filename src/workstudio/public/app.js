@@ -5,6 +5,8 @@ const summaryEl = document.getElementById("snapshotSummary");
 const agentListEl = document.getElementById("agentList");
 const sessionListEl = document.getElementById("sessionList");
 
+let eventSource = null;
+
 function sessionState(session) {
   if (session.hasActiveRun || session.running === true) return "working";
   if (session.queued === true) return "queued";
@@ -37,20 +39,6 @@ function renderRows(container, rows, emptyText) {
   }
 }
 
-async function fetchGatewayState() {
-  const response = await fetch("/workstudio/api/gateway", {
-    headers: { Accept: "application/json" },
-    cache: "no-store",
-  });
-
-  const payload = await response.json();
-  if (!response.ok || !payload.ok) {
-    throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
-  }
-
-  return payload.data || {};
-}
-
 function renderGatewayState(data) {
   const sessions = Array.isArray(data.sessions) ? data.sessions : [];
 
@@ -78,35 +66,57 @@ function renderGatewayState(data) {
   renderRows(agentListEl, agents, "目前 Gateway subscription 沒有 Agent session。");
   renderRows(sessionListEl, recentSessions, "目前沒有 session。");
 
-  statusEl.textContent = data.connected && data.subscribed ? "CONNECTED" : "DEGRADED";
-  summaryEl.textContent = `Gateway ${data.serverVersion || "unknown"} · protocol ${data.protocol ?? "-"} · subscription ${data.subscribed ? "active" : "inactive"} · ${sessions.length} sessions。資料來自 Gateway subscription 記憶體狀態，不再執行 CLI session snapshot。`;
+  statusEl.textContent = data.connected && data.subscribed ? "CONNECTED" : "CONNECTING";
+  summaryEl.textContent = `Gateway ${data.serverVersion || "unknown"} · protocol ${data.protocol ?? "-"} · subscription ${data.subscribed ? "active" : "inactive"} · ${sessions.length} sessions。資料由 Gateway subscription 即時推送；頁面關閉後 subscription 會跟著釋放。`;
 }
 
-async function loadGatewayState() {
-  const retryDelays = [0, 1200, 2400, 4000];
-  let lastError = null;
-
-  statusEl.textContent = "CONNECTING";
-  summaryEl.textContent = "正在連接 OpenClaw Gateway subscription…";
-
-  for (const delay of retryDelays) {
-    if (delay > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-
-    try {
-      const data = await fetchGatewayState();
-      renderGatewayState(data);
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
+function renderError(message) {
   statusEl.textContent = "ERROR";
-  summaryEl.textContent = `無法讀取 Gateway subscription：${lastError?.message || "unknown error"}`;
+  summaryEl.textContent = `無法讀取 Gateway subscription：${message || "unknown error"}`;
   renderRows(agentListEl, [], "尚未取得 Agent 資料。");
   renderRows(sessionListEl, [], "尚未取得 Session 資料。");
 }
 
-loadGatewayState();
+function connectEventStream() {
+  if (eventSource) eventSource.close();
+
+  statusEl.textContent = "CONNECTING";
+  summaryEl.textContent = "正在建立 Workstudio 即時連線…";
+
+  const source = new EventSource("/workstudio/api/events");
+  eventSource = source;
+
+  source.addEventListener("gateway-state", (event) => {
+    try {
+      renderGatewayState(JSON.parse(event.data || "{}"));
+    } catch (error) {
+      renderError(String(error));
+    }
+  });
+
+  source.addEventListener("gateway-error", (event) => {
+    try {
+      const payload = JSON.parse(event.data || "{}");
+      renderError(payload.message || "Gateway connection failed");
+    } catch (error) {
+      renderError(String(error));
+    }
+  });
+
+  source.onerror = () => {
+    if (document.visibilityState === "hidden") return;
+    statusEl.textContent = "RECONNECTING";
+    summaryEl.textContent = "即時連線中斷，瀏覽器正在重新連線…";
+  };
+}
+
+function disconnectEventStream() {
+  if (!eventSource) return;
+  eventSource.close();
+  eventSource = null;
+}
+
+window.addEventListener("pagehide", disconnectEventStream);
+window.addEventListener("beforeunload", disconnectEventStream);
+
+connectEventStream();
