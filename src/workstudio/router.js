@@ -129,6 +129,7 @@ workstudioRouter.get("/api/events", async (req, res) => {
         message: String(error?.message || error),
         state: getGatewayClientState(),
       });
+      res.end();
     }
   }
 });
