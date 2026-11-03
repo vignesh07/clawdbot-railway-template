@@ -10,7 +10,22 @@ let eventSource = null;
 function sessionState(session) {
   if (session.hasActiveRun || session.running === true) return "working";
   if (session.queued === true) return "queued";
+  const state = String(session.status || session.state || "").toLowerCase();
+  if (["error", "failed", "failure"].includes(state)) return "error";
   return "idle";
+}
+
+function formatTime(value) {
+  if (!value) return "尚無活動";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("zh-TW", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
 }
 
 function renderRows(container, rows, emptyText) {
@@ -39,41 +54,95 @@ function renderRows(container, rows, emptyText) {
   }
 }
 
-function renderGatewayState(data) {
-  const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+function renderAgents(agents) {
+  agentListEl.replaceChildren();
 
-  const byAgent = new Map();
-  for (const session of sessions) {
-    const agentId = session.agentId || session.owner || "unknown";
-    const existing = byAgent.get(agentId) || { active: 0, total: 0 };
-    existing.total += 1;
-    if (sessionState(session) === "working") existing.active += 1;
-    byAgent.set(agentId, existing);
+  if (!agents.length) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = "Gateway 沒有回傳 Agent roster。";
+    agentListEl.appendChild(p);
+    return;
   }
 
-  const agents = [...byAgent.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([agentId, stats]) => ({
-      label: agentId,
-      state: stats.active > 0 ? "working" : `idle · ${stats.total} session${stats.total === 1 ? "" : "s"}`,
-    }));
+  for (const agent of agents) {
+    const item = document.createElement("div");
+    item.className = `agent-overview agent-${agent.status || "idle"}`;
+
+    const main = document.createElement("div");
+    main.className = "agent-main";
+
+    const identity = document.createElement("div");
+    identity.className = "agent-identity";
+
+    const title = document.createElement("strong");
+    title.className = "agent-name";
+    title.textContent = agent.name || agent.agentId || "unknown";
+
+    const id = document.createElement("span");
+    id.className = "agent-id";
+    id.textContent = agent.agentId || "unknown";
+
+    identity.append(title, id);
+
+    const status = document.createElement("span");
+    status.className = `agent-status status-${agent.status || "idle"}`;
+    status.textContent = String(agent.status || "idle").toUpperCase();
+
+    main.append(identity, status);
+
+    const meta = document.createElement("div");
+    meta.className = "agent-meta";
+
+    const metaItems = [
+      ["Model", agent.model || "未提供"],
+      ["Runtime", agent.runtime || "未提供"],
+      ["Team", agent.team || "未設定"],
+      ["Last activity", formatTime(agent.lastActivityAt)],
+      ["Session", agent.activeSession || (agent.sessionCount ? `${agent.sessionCount} recorded` : "none")],
+    ];
+
+    for (const [label, value] of metaItems) {
+      const cell = document.createElement("div");
+      cell.className = "agent-meta-item";
+
+      const key = document.createElement("span");
+      key.className = "agent-meta-label";
+      key.textContent = label;
+
+      const text = document.createElement("span");
+      text.className = "agent-meta-value";
+      text.textContent = String(value);
+
+      cell.append(key, text);
+      meta.appendChild(cell);
+    }
+
+    item.append(main, meta);
+    agentListEl.appendChild(item);
+  }
+}
+
+function renderGatewayState(data) {
+  const agents = Array.isArray(data.agents) ? data.agents : [];
+  const sessions = Array.isArray(data.sessions) ? data.sessions : [];
 
   const recentSessions = sessions.slice(0, 12).map((session) => ({
     label: session.key || session.id || session.agentId || session.owner || "session",
     state: sessionState(session),
   }));
 
-  renderRows(agentListEl, agents, "目前 Gateway subscription 沒有 Agent session。");
+  renderAgents(agents);
   renderRows(sessionListEl, recentSessions, "目前沒有 session。");
 
   statusEl.textContent = data.connected && data.subscribed ? "CONNECTED" : "CONNECTING";
-  summaryEl.textContent = `Gateway ${data.serverVersion || "unknown"} · protocol ${data.protocol ?? "-"} · subscription ${data.subscribed ? "active" : "inactive"} · ${sessions.length} sessions。資料由 Gateway subscription 即時推送；頁面關閉後 subscription 會跟著釋放。`;
+  summaryEl.textContent = `Gateway ${data.serverVersion || "unknown"} · protocol ${data.protocol ?? "-"} · subscription ${data.subscribed ? "active" : "inactive"} · Agent roster ${agents.length} · sessions ${sessions.length}。資料由 Gateway 即時推送；頁面關閉後 subscription 會跟著釋放。`;
 }
 
 function renderError(message) {
   statusEl.textContent = "ERROR";
   summaryEl.textContent = `無法讀取 Gateway subscription：${message || "unknown error"}`;
-  renderRows(agentListEl, [], "尚未取得 Agent 資料。");
+  renderAgents([]);
   renderRows(sessionListEl, [], "尚未取得 Session 資料。");
 }
 
